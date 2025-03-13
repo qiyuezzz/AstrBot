@@ -1,7 +1,7 @@
 import aiohttp
 import datetime
 import builtins
-import json
+import traceback
 import astrbot.api.star as star
 import astrbot.api.event.filter as filter
 from astrbot.api.event import AstrMessageEvent, MessageEventResult
@@ -17,7 +17,7 @@ from astrbot.core.star.filter.permission import PermissionTypeFilter
 from astrbot.core.config.default import VERSION
 from .long_term_memory import LongTermMemory
 from astrbot.core import logger
-from astrbot.api.message_components import Plain, Image
+from astrbot.api.message_components import Plain, Image, Reply
 
 from typing import Union
 
@@ -72,16 +72,14 @@ class Main(star.Star):
         dashboard_version = await get_dashboard_version()
 
         msg = f"""AstrBot v{VERSION}(WebUI: {dashboard_version})
-AstrBot 指令:
+内置指令:
 [System]
 /plugin: 查看插件、插件帮助
 /t2i: 开关文本转图片
 /tts: 开关文本转语音
 /sid: 获取会话 ID
-/op <admin_id>: 授权管理员(op)
-/deop <admin_id>: 取消管理员(op)
-/wl <sid>: 添加白名单(op)
-/dwl <sid>: 删除白名单(op)
+/op: 管理员
+/wl: 白名单
 /dashboard_update: 更新管理面板(op)
 /alter_cmd: 设置指令权限(op)
 
@@ -164,8 +162,11 @@ AstrBot 指令:
             plugin_list_info = "已加载的插件：\n"
             for plugin in self.context.get_all_stars():
                 plugin_list_info += (
-                    f"- `{plugin.name}` By {plugin.author}: {plugin.desc}\n"
+                    f"- `{plugin.name}` By {plugin.author}: {plugin.desc}"
                 )
+                if not plugin.activated:
+                    plugin_list_info += " (未启用)"
+                plugin_list_info += "\n"
             if plugin_list_info.strip() == "":
                 plugin_list_info = "没有加载任何插件。"
 
@@ -199,12 +200,8 @@ AstrBot 指令:
                 if plugin is None:
                     event.set_result(MessageEventResult().message("未找到此插件。"))
                     return
-                help_msg = (
-                    plugin.star_cls.__doc__
-                    if plugin.star_cls.__doc__
-                    else "帮助信息: 未提供"
-                )
-                help_msg += f"\n\n作者: {plugin.author}\n版本: {plugin.version}"
+                help_msg = ""
+                help_msg += f"\n\n✨ 作者: {plugin.author}\n✨ 版本: {plugin.version}"
                 command_handlers = []
                 command_names = []
                 for handler in star_handlers_registry:
@@ -221,13 +218,16 @@ AstrBot 指令:
                             command_names.append(filter_.group_name)
 
                 if len(command_handlers) > 0:
-                    help_msg += "\n\n指令列表：\n"
+                    help_msg += "\n\n🔧 指令列表：\n"
                     for i in range(len(command_handlers)):
-                        help_msg += f"{command_names[i]}: {command_handlers[i].desc}\n"
+                        help_msg += f"- {command_names[i]}"
+                        if command_handlers[i].desc:
+                            help_msg += f": {command_handlers[i].desc}"
+                        help_msg += "\n"
 
                     help_msg += "\nTip: 指令的触发需要添加唤醒前缀，默认为 /。"
 
-                ret = f"插件 {oper1} 帮助信息：\n" + help_msg
+                ret = f"🧩 插件 {oper1} 帮助信息：\n" + help_msg
                 ret += "更多帮助信息请查看插件仓库 README。"
                 event.set_result(MessageEventResult().message(ret).use_t2i(False))
 
@@ -262,14 +262,31 @@ AstrBot 指令:
         """获取会话 ID 和 管理员 ID"""
         sid = event.unified_msg_origin
         user_id = str(event.get_sender_id())
-        ret = f"""SID: {sid} 此 ID 可用于设置会话白名单。/wl <SID> 添加白名单, /dwl <SID> 删除白名单。
-UID: {user_id} 此 ID 可用于设置管理员。/op <UID> 授权管理员, /deop <UID> 取消管理员。"""
+        ret = f"""SID: {sid} 此 ID 可用于设置会话白名单。
+/wl <SID> 添加白名单, /dwl <SID> 删除白名单。
+
+UID: {user_id} 此 ID 可用于设置管理员。
+/op <UID> 授权管理员, /deop <UID> 取消管理员。"""
+
+        if (
+            self.context.get_config()["platform_settings"]["unique_session"]
+            and event.get_group_id()
+        ):
+            ret += f"\n\n当前处于独立会话模式, 此群 ID: {event.get_group_id()}, 也可将此 ID 加入白名单来放行整个群聊。"
+
         event.set_result(MessageEventResult().message(ret).use_t2i(False))
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("op")
-    async def op(self, event: AstrMessageEvent, admin_id: str):
+    async def op(self, event: AstrMessageEvent, admin_id: str = None):
         """授权管理员。op <admin_id>"""
+        if admin_id is None:
+            event.set_result(
+                MessageEventResult().message(
+                    "使用方法: /op <id> 授权管理员；/deop <id> 取消管理员。可通过 /sid 获取 ID。"
+                )
+            )
+            return
         self.context.get_config()["admins_id"].append(admin_id)
         self.context.get_config().save_config()
         event.set_result(MessageEventResult().message("授权成功。"))
@@ -289,8 +306,14 @@ UID: {user_id} 此 ID 可用于设置管理员。/op <UID> 授权管理员, /deo
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("wl")
-    async def wl(self, event: AstrMessageEvent, sid: str):
+    async def wl(self, event: AstrMessageEvent, sid: str = None):
         """添加白名单。wl <sid>"""
+        if sid is None:
+            event.set_result(
+                MessageEventResult().message(
+                    "使用方法: /wl <id> 添加白名单；/dwl <id> 删除白名单。可通过 /sid 获取 ID。"
+                )
+            )
         self.context.get_config()["platform_settings"]["id_whitelist"].append(sid)
         self.context.get_config().save_config()
         event.set_result(MessageEventResult().message("添加白名单成功。"))
@@ -1023,9 +1046,7 @@ UID: {user_id} 此 ID 可用于设置管理员。/op <UID> 授权管理员, /deo
                     return
                 try:
                     conv = None
-                    history = []
                     if provider.meta().type != "dify":
-                        # Dify 自己有维护对话，不需要 bot 端维护。
                         session_curr_cid = await self.context.conversation_manager.get_curr_conversation_id(
                             event.unified_msg_origin
                         )
@@ -1039,10 +1060,8 @@ UID: {user_id} 此 ID 可用于设置管理员。/op <UID> 授权管理员, /deo
                         conv = await self.context.conversation_manager.get_conversation(
                             event.unified_msg_origin, session_curr_cid
                         )
-                        history = []
-                        if conv:
-                            history = json.loads(conv.history)
                     else:
+                        # Dify 自己有维护对话，不需要 bot 端维护。
                         assert isinstance(provider, ProviderDify)
                         cid = provider.conversation_ids.get(
                             event.unified_msg_origin, None
@@ -1061,17 +1080,24 @@ UID: {user_id} 此 ID 可用于设置管理员。/op <UID> 授权管理员, /deo
                         prompt=prompt,
                         func_tool_manager=self.context.get_llm_tool_manager(),
                         session_id=event.session_id,
-                        contexts=history if history else [],
                         conversation=conv,
                     )
                 except BaseException as e:
+                    logger.error(traceback.format_exc())
                     logger.error(f"主动回复失败: {e}")
 
     @filter.on_llm_request()
     async def decorate_llm_req(self, event: AstrMessageEvent, req: ProviderRequest):
-        """在请求 LLM 前注入人格信息、Identifier、时间等 System Prompt"""
+        """在请求 LLM 前注入人格信息、Identifier、时间、回复内容等 System Prompt"""
         if self.prompt_prefix:
             req.prompt = self.prompt_prefix + req.prompt
+
+        # 解析引用内容
+        quote = None
+        for comp in event.message_obj.message:
+            if isinstance(comp, Reply):
+                quote = comp
+                break
 
         if self.identifier:
             user_id = event.message_obj.sender.user_id
@@ -1080,9 +1106,10 @@ UID: {user_id} 此 ID 可用于设置管理员。/op <UID> 授权管理员, /deo
             req.prompt = user_info + req.prompt
 
         if self.enable_datetime:
-            tz_offset = datetime.timedelta(hours=8)
-            tz = datetime.timezone(tz_offset)
-            current_time = datetime.datetime.now(tz).strftime("%Y-%m-%d %H:%M")
+            # Including timezone
+            current_time = (
+                datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M (%Z)")
+            )
             req.system_prompt += f"\nCurrent datetime: {current_time}\n"
 
         if req.conversation:
@@ -1106,6 +1133,13 @@ UID: {user_id} 此 ID 可用于设置管理员。/op <UID> 授权管理员, /deo
                     req.system_prompt += mood_dialogs
                 if begin_dialogs := persona["_begin_dialogs_processed"]:
                     req.contexts[:0] = begin_dialogs
+
+        if quote and quote.message_str:
+            if quote.sender_nickname:
+                sender_info = f"(Sent by {quote.sender_nickname})"
+            else:
+                sender_info = ""
+            req.system_prompt += f"\nUser is quoting the message{sender_info}: {quote.message_str}, please consider the context."
 
         if self.ltm:
             try:

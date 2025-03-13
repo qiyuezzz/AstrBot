@@ -2,6 +2,7 @@ from astrbot.api.event import AstrMessageEvent, MessageChain
 from astrbot.api.platform import AstrBotMessage, PlatformMetadata, MessageType
 from astrbot.api.message_components import Plain, Image, Reply, At, File, Record
 from telegram.ext import ExtBot
+from astrbot.core.utils.io import download_file
 
 
 class TelegramPlatformEvent(AstrMessageEvent):
@@ -31,12 +32,18 @@ class TelegramPlatformEvent(AstrMessageEvent):
                 at_user_id = i.name
 
         at_flag = False
+        message_thread_id = None
+        if "#" in user_name:
+            # it's a supergroup chat with message_thread_id
+            user_name, message_thread_id = user_name.split("#")
         for i in message.chain:
             payload = {
                 "chat_id": user_name,
             }
             if has_reply:
                 payload["reply_to_message_id"] = reply_message_id
+            if message_thread_id:
+                payload["reply_to_message_id"] = message_thread_id
 
             if isinstance(i, Plain):
                 if at_user_id and not at_flag:
@@ -58,6 +65,11 @@ class TelegramPlatformEvent(AstrMessageEvent):
                 else:
                     await client.send_photo(photo=image_path, **payload)
             elif isinstance(i, File):
+                if i.file.startswith("https://"):
+                    path = "data/temp/" + i.name
+                    await download_file(i.file, path)
+                    i.file = path
+
                 await client.send_document(document=i.file, filename=i.name, **payload)
             elif isinstance(i, Record):
                 await client.send_voice(voice=i.file, **payload)

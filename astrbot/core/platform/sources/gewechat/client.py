@@ -87,6 +87,15 @@ class SimpleGewechatClient:
             type_name = data["type_name"]
         else:
             raise Exception("无法识别的消息类型")
+
+        # 以下没有业务处理，只是避免控制台打印太多的日志
+        if type_name == "ModContacts":
+            logger.info("gewechat下发：ModContacts消息通知。")
+            return
+        if type_name == "DelContacts":
+            logger.info("gewechat下发：DelContacts消息通知。")
+            return
+
         if type_name == "Offline":
             logger.critical("收到 gewechat 下线通知。")
             return
@@ -146,6 +155,11 @@ class SimpleGewechatClient:
         else:
             abm.type = MessageType.FRIEND_MESSAGE
             user_id = from_user_name
+
+        # 检查消息是否由自己发送，若是则忽略
+        if user_id == abm.self_id:
+            logger.info("忽略自己发送的消息")
+            return None
 
         abm.message = []
         if at_me:
@@ -207,6 +221,31 @@ class SimpleGewechatClient:
                     async with await anyio.open_file(file_path, "wb") as f:
                         await f.write(voice_data)
                     abm.message.append(Record(file=file_path, url=file_path))
+
+            # 以下已知消息类型，没有业务处理，只是避免控制台打印太多的日志
+            case 37:  # 好友申请
+                logger.info("消息类型(37)：好友申请")
+            case 42:  # 名片
+                logger.info("消息类型(42)：名片")
+            case 43:  # 视频
+                logger.info("消息类型(43)：视频")
+            case 47:  # emoji
+                logger.info("消息类型(47)：emoji")
+            case 48:  # 地理位置
+                logger.info("消息类型(48)：地理位置")
+            case 49:  # 公众号/文件/小程序/引用/转账/红包/视频号/群聊邀请
+                logger.info(
+                    "消息类型(49)：公众号/文件/小程序/引用/转账/红包/视频号/群聊邀请"
+                )
+            case 51:  # 帐号消息同步?
+                logger.info("消息类型(51)：帐号消息同步？")
+            case 10000:  # 被踢出群聊/更换群主/修改群名称
+                logger.info("消息类型(10000)：被踢出群聊/更换群主/修改群名称")
+            case 10002:  # 撤回/拍一拍/成员邀请/被移出群聊/解散群聊/群公告/群待办
+                logger.info(
+                    "消息类型(10002)：撤回/拍一拍/成员邀请/被移出群聊/解散群聊/群公告/群待办"
+                )
+
             case _:
                 logger.info(f"未实现的消息类型: {d['MsgType']}")
                 abm.raw_message = d
@@ -304,32 +343,49 @@ class SimpleGewechatClient:
         )
 
         if self.appid:
-            online = await self.check_online(self.appid)
-            if online:
-                logger.info(f"APPID: {self.appid} 已在线")
-                return
+            try:
+                online = await self.check_online(self.appid)
+                if online:
+                    logger.info(f"APPID: {self.appid} 已在线")
+                    return
+            except Exception as e:
+                logger.error(f"检查在线状态失败: {e}")
+                sp.put(f"gewechat-appid-{self.nickname}", "")
+                self.appid = None
 
         payload = {"appId": self.appid}
 
         if self.appid:
             logger.info(f"使用 APPID: {self.appid}, {self.nickname}")
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{self.base_url}/login/getLoginQrCode",
-                headers=self.headers,
-                json=payload,
-            ) as resp:
-                json_blob = await resp.json()
-                if json_blob["ret"] != 200:
-                    raise Exception(f"获取二维码失败: {json_blob}")
-                qr_data = json_blob["data"]["qrData"]
-                qr_uuid = json_blob["data"]["uuid"]
-                appid = json_blob["data"]["appId"]
-                logger.info(f"APPID: {appid}")
-                logger.warning(
-                    f"请打开该网址，然后使用微信扫描二维码登录: https://api.cl2wm.cn/api/qrcode/code?text={qr_data}"
-                )
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{self.base_url}/login/getLoginQrCode",
+                    headers=self.headers,
+                    json=payload,
+                ) as resp:
+                    json_blob = await resp.json()
+                    if json_blob["ret"] != 200:
+                        error_msg = json_blob.get("data", {}).get("msg", "")
+                        if "设备不存在" in error_msg:
+                            logger.error(
+                                f"检测到无效的appid: {self.appid}，将清除并重新登录。"
+                            )
+                            sp.put(f"gewechat-appid-{self.nickname}", "")
+                            self.appid = None
+                            return await self.login()
+                        else:
+                            raise Exception(f"获取二维码失败: {json_blob}")
+                    qr_data = json_blob["data"]["qrData"]
+                    qr_uuid = json_blob["data"]["uuid"]
+                    appid = json_blob["data"]["appId"]
+                    logger.info(f"APPID: {appid}")
+                    logger.warning(
+                        f"请打开该网址，然后使用微信扫描二维码登录: https://api.cl2wm.cn/api/qrcode/code?text={qr_data}"
+                    )
+        except Exception as e:
+            raise e
 
         # 执行登录
         retry_cnt = 64

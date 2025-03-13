@@ -17,6 +17,7 @@ from astrbot.api.message_components import (
     File as AstrBotFile,
     Video,
     At,
+    Reply,
 )
 from astrbot.core.platform.astr_message_event import MessageSesion
 from astrbot.api.platform import register_platform_adapter
@@ -24,7 +25,7 @@ from astrbot.api.platform import register_platform_adapter
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, filters
 from telegram.constants import ChatType
-from telegram.ext import MessageHandler as TelegramMessageHandler, CommandHandler
+from telegram.ext import MessageHandler as TelegramMessageHandler
 from .tg_event import TelegramPlatformEvent
 from astrbot.api import logger
 from telegram.ext import ExtBot
@@ -50,18 +51,29 @@ class TelegramPlatformAdapter(Platform):
         )
         if not base_url:
             base_url = "https://api.telegram.org/bot"
+
+        file_base_url = self.config.get(
+            "telegram_file_base_url", "https://api.telegram.org/file/bot"
+        )
+        if not file_base_url:
+            file_base_url = "https://api.telegram.org/file/bot"
+
+        self.base_url = base_url
+
         self.application = (
             ApplicationBuilder()
             .token(self.config["telegram_token"])
             .base_url(base_url)
+            .base_file_url(file_base_url)
             .build()
         )
         message_handler = TelegramMessageHandler(
             filters=filters.ALL,  # receive all messages
-            callback=self.convert_message,
+            callback=self.message_handler,
         )
         self.application.add_handler(message_handler)
         self.client = self.application.bot
+        logger.debug(f"Telegram base url: {self.client.base_url}")
 
     @override
     async def send_by_session(
@@ -93,42 +105,80 @@ class TelegramPlatformAdapter(Platform):
             chat_id=update.effective_chat.id, text=self.config["start_message"]
         )
 
+    async def message_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        logger.debug(f"Telegram message: {update.message}")
+        abm = await self.convert_message(update, context)
+        await self.handle_msg(abm)
+
     async def convert_message(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE, get_reply=True
     ) -> AstrBotMessage:
+        """转换 Telegram 的消息对象为 AstrBotMessage 对象。
+
+        @param update: Telegram 的 Update 对象。
+        @param context: Telegram 的 Context 对象。
+        @param get_reply: 是否获取回复消息。这个参数是为了防止多个回复嵌套。
+        """
         message = AstrBotMessage()
         # 获得是群聊还是私聊
-        if update.effective_chat.type == ChatType.PRIVATE:
+        if update.message.chat.type == ChatType.PRIVATE:
             message.type = MessageType.FRIEND_MESSAGE
         else:
             message.type = MessageType.GROUP_MESSAGE
-            message.group_id = update.effective_chat.id
+            message.group_id = str(update.message.chat.id)
+            if update.message.message_thread_id:
+                # Topic Group
+                message.group_id += "#" + str(update.message.message_thread_id)
+
         message.message_id = str(update.message.message_id)
-        message.session_id = str(update.effective_chat.id)
+        message.session_id = str(update.message.chat.id)
         message.sender = MessageMember(
-            str(update.effective_user.id), update.effective_user.username
+            str(update.message.from_user.id), update.message.from_user.username
         )
         message.self_id = str(context.bot.username)
         message.raw_message = update
         message.message_str = ""
         message.message = []
 
-        logger.debug(f"Telegram message: {update.message}")
+        if update.message.reply_to_message:
+            # 获取回复消息
+            reply_update = Update(
+                update_id=1,
+                message=update.message.reply_to_message,
+            )
+            reply_abm = await self.convert_message(reply_update, context, False)
+
+            message.message.append(
+                Reply(
+                    id=reply_abm.message_id,
+                    chain=reply_abm.message,
+                    sender_id=reply_abm.sender.user_id,
+                    sender_nickname=reply_abm.sender.nickname,
+                    time=reply_abm.timestamp,
+                    message_str=reply_abm.message_str,
+                    text=reply_abm.message_str,
+                    qq=reply_abm.sender.user_id,
+                )
+            )
 
         if update.message.text:
+            # 处理文本消息
             plain_text = update.message.text
 
             if update.message.entities:
                 for entity in update.message.entities:
                     if entity.type == "mention":
-                        name = plain_text[entity.offset+1 : entity.offset + entity.length]
+                        name = plain_text[
+                            entity.offset + 1 : entity.offset + entity.length
+                        ]
                         message.message.append(At(qq=name, name=name))
                         plain_text = (
                             plain_text[: entity.offset]
                             + plain_text[entity.offset + entity.length :]
                         )
 
-            message.message.append(Plain(plain_text))
+            if plain_text:
+                message.message.append(Plain(plain_text))
             message.message_str = plain_text
 
             if message.message_str == "/start":
@@ -160,7 +210,7 @@ class TelegramPlatformAdapter(Platform):
                 Video(file=file.file_path, path=file.file_path),
             ]
 
-        await self.handle_msg(message)
+        return message
 
     async def handle_msg(self, message: AstrBotMessage):
         message_event = TelegramPlatformEvent(

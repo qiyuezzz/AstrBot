@@ -13,7 +13,7 @@ from astrbot.core.platform import (
 from astrbot.core.message.message_event_result import MessageChain
 from astrbot.core.message.components import Plain, Image, Record  # noqa: F403
 from astrbot import logger
-from astrbot.core import web_chat_queue, web_chat_back_queue
+from astrbot.core import web_chat_queue
 from .webchat_event import WebChatMessageEvent
 from astrbot.core.platform.astr_message_event import MessageSesion
 from ...register import register_platform_adapter
@@ -50,14 +50,7 @@ class WebChatAdapter(Platform):
     async def send_by_session(
         self, session: MessageSesion, message_chain: MessageChain
     ):
-        # abm.session_id = f"webchat!{username}!{cid}"
-        plain = ""
-        cid = session.session_id.split("!")[-1]
-        for comp in message_chain.chain:
-            if isinstance(comp, Plain):
-                plain += comp.text
-        web_chat_back_queue.put_nowait((plain, cid))
-
+        await WebChatMessageEvent._send(message_chain, session.session_id)
         await super().send_by_session(session, message_chain)
 
     async def convert_message(self, data: tuple) -> AstrBotMessage:

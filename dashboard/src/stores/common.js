@@ -18,6 +18,7 @@ export const useCommonStore = defineStore({
       "gewechat": "https://astrbot.app/deploy/platform/gewechat.html",
       "lark": "https://astrbot.app/deploy/platform/lark.html",
       "telegram": "https://astrbot.app/deploy/platform/telegram.html",
+      "dingtalk": "https://astrbot.app/deploy/platform/dingtalk.html",
     },
 
     pluginMarketData: []
@@ -72,7 +73,9 @@ export const useCommonStore = defineStore({
               "installed": false,
               "version": res.data.data[key]?.version ? res.data.data[key].version : "未知",
               "social_link": res.data.data[key]?.social_link,
-              "tags": res.data.data[key]?.tags ? res.data.data[key].tags : []
+              "tags": res.data.data[key]?.tags ? res.data.data[key].tags : [],
+              "logo": res.data.data[key]?.logo ? res.data.data[key].logo : "",
+              "pinned": res.data.data[key]?.pinned ? res.data.data[key].pinned : false,
             })
           }
           this.pluginMarketData = data;
