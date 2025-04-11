@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, inject } from 'vue';
 
 const props = defineProps({
   extension: {
@@ -24,12 +24,9 @@ const emit = defineEmits([
   'install',
   'uninstall',
   'toggle-activation',
-  'view-handlers'
+  'view-handlers',
+  'view-readme'
 ]);
-
-const open = (link: string | undefined) => {
-  window.open(link, '_blank');
-};
 
 const reveal = ref(false);
 
@@ -46,8 +43,21 @@ const reloadExtension = () => {
   emit('reload', props.extension);
 };
 
-const uninstallExtension = () => {
-  emit('uninstall', props.extension);
+const $confirm = inject("$confirm");
+const uninstallExtension = async () => {
+  if (typeof $confirm !== "function") {
+    console.error("$confirm 未正确注册");
+    return;
+  }
+
+  const confirmed = await $confirm({
+    title: "删除确认",
+    message: "你确定要删除当前插件吗？",
+  });
+
+  if (confirmed) {
+    emit("uninstall", props.extension);
+  }
 };
 
 const toggleActivation = () => {
@@ -56,6 +66,10 @@ const toggleActivation = () => {
 
 const viewHandlers = () => {
   emit('view-handlers', props.extension);
+};
+
+const viewReadme = () => {
+  emit('view-readme', props.extension);
 };
 </script>
 
@@ -70,11 +84,10 @@ const viewHandlers = () => {
         <p class="text-h3 font-weight-black" :class="{ 'text-h4': $vuetify.display.xs }">
           {{ extension.name }}
           <v-tooltip location="top" v-if="extension?.has_update && !marketMode">
-            P
             <template v-slot:activator="{ props: tooltipProps }">
               <v-icon v-bind="tooltipProps" color="warning" class="ml-2" icon="mdi-update" size="small"></v-icon>
             </template>
-            <span>有新版本可用: {{ extension.online_version }} {{ extension }}</span>
+            <span>有新版本可用: {{ extension.online_version }}</span>
           </v-tooltip>
           <v-tooltip location="top" v-if="!extension.activated && !marketMode">
             <template v-slot:activator="{ props: tooltipProps }">
@@ -116,7 +129,7 @@ const viewHandlers = () => {
     </v-card-text>
 
     <v-card-actions style="padding: 0px; margin-top: auto;">
-      <v-btn color="teal-accent-4" text="帮助" variant="text" @click="open(extension.repo)"></v-btn>
+      <v-btn color="teal-accent-4" text="查看文档" variant="text" @click="viewReadme"></v-btn>
       <v-btn v-if="!marketMode" color="teal-accent-4" text="操作" variant="text" @click="reveal = true"></v-btn>
       <v-btn v-if="marketMode && !extension?.installed" color="teal-accent-4" text="安装" variant="text"
         @click="emit('install', extension)"></v-btn>

@@ -31,7 +31,12 @@ const sidebarItem: menu[] = [
     to: '/providers',
   },
   {
-    title: '配置',
+    title: 'MCP',
+    icon: 'mdi-function-variant',
+    to: '/tool-use'
+  },
+  {
+    title: '配置文件',
     icon: 'mdi-cog',
     to: '/config',
   },
@@ -49,6 +54,11 @@ const sidebarItem: menu[] = [
     title: '聊天',
     icon: 'mdi-chat',
     to: '/chat'
+  },
+  {
+    title: '对话数据库',
+    icon: 'mdi-database',
+    to: '/conversation'
   },
   {
     title: '控制台',

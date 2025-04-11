@@ -2,15 +2,20 @@ import aiohttp
 import datetime
 import builtins
 import traceback
+import re
+import zoneinfo
 import astrbot.api.star as star
 import astrbot.api.event.filter as filter
 from astrbot.api.event import AstrMessageEvent, MessageEventResult
 from astrbot.api import sp
 from astrbot.api.provider import ProviderRequest
+from astrbot.core.platform.astr_message_event import MessageSesion
+from astrbot.core.platform.message_type import MessageType
 from astrbot.core.provider.sources.dify_source import ProviderDify
 from astrbot.core.utils.io import download_dashboard, get_dashboard_version
 from astrbot.core.star.star_handler import star_handlers_registry, StarHandlerMetadata
 from astrbot.core.star.star import star_map
+from astrbot.core.star.star_manager import PluginManager
 from astrbot.core.star.filter.command import CommandFilter
 from astrbot.core.star.filter.command_group import CommandGroupFilter
 from astrbot.core.star.filter.permission import PermissionTypeFilter
@@ -18,7 +23,6 @@ from astrbot.core.config.default import VERSION
 from .long_term_memory import LongTermMemory
 from astrbot.core import logger
 from astrbot.api.message_components import Plain, Image, Reply
-
 from typing import Union
 
 
@@ -35,7 +39,12 @@ class Main(star.Star):
         self.prompt_prefix = cfg["provider_settings"]["prompt_prefix"]
         self.identifier = cfg["provider_settings"]["identifier"]
         self.enable_datetime = cfg["provider_settings"]["datetime_system_prompt"]
-
+        self.timezone = cfg.get("timezone")
+        if not self.timezone:
+            # 系统默认时区
+            self.timezone = None
+        else:
+            logger.info(f"Timezone set to: {self.timezone}")
         self.ltm = None
         if (
             self.context.get_config()["provider_ltm_settings"]["group_icl_enable"]
@@ -84,14 +93,16 @@ class Main(star.Star):
 /alter_cmd: 设置指令权限(op)
 
 [大模型]
+/llm: 开启/关闭 LLM
 /provider: 大模型提供商
 /model: 模型列表
 /ls: 对话列表
 /new: 创建新对话
+/groupnew 群号: 为群聊创建新对话(op)
 /switch 序号: 切换对话
 /rename 新名字: 重命名当前对话
 /del: 删除当前会话对话(op)
-/reset: 重置 LLM 会话(op)
+/reset: 重置 LLM 会话
 /history: 当前对话的对话记录
 /persona: 人格情景(op)
 /tool ls: 函数工具
@@ -100,6 +111,20 @@ class Main(star.Star):
 {notice}"""
 
         event.set_result(MessageEventResult().message(msg).use_t2i(False))
+
+    @filter.command("llm")
+    async def llm(self, event: AstrMessageEvent):
+        """开启/关闭 LLM"""
+        cfg = self.context.get_config()
+        enable = cfg["provider_settings"]["enable"]
+        if enable:
+            cfg["provider_settings"]["enable"] = False
+            status = "关闭"
+        else:
+            cfg["provider_settings"]["enable"] = True
+            status = "开启"
+        cfg.save_config()
+        yield event.plain_result(f"{status} LLM 聊天功能。")
 
     @filter.command_group("tool")
     def tool(self):
@@ -193,7 +218,29 @@ class Main(star.Star):
                     return
                 await self.context._star_manager.turn_on_plugin(oper2)
                 event.set_result(MessageEventResult().message(f"插件 {oper2} 已启用。"))
+            elif oper1 == "get":
+                if not oper2:
+                    raise Exception("请输入插件地址。")
+                if not event.is_admin():
+                    raise Exception(
+                        "改指令限制仅管理员使用，且无法通过 /alter_cmd 更改。"
+                    )
+                if not oper2.startswith("http"):
+                    oper2 = f"https://github.com/{oper2}"
 
+                logger.info(f"准备从 {oper2} 获取插件。")
+
+                if self.context._star_manager:
+                    star_mgr: PluginManager = self.context._star_manager
+                    try:
+                        await star_mgr.install_plugin(oper2)
+                        event.set_result(MessageEventResult().message("获取插件成功。"))
+                    except Exception as e:
+                        logger.error(f"获取插件失败: {e}")
+                        event.set_result(
+                            MessageEventResult().message(f"获取插件失败: {e}")
+                        )
+                        return
             else:
                 # 获取插件帮助
                 plugin = self.context.get_registered_star(oper1)
@@ -287,7 +334,7 @@ UID: {user_id} 此 ID 可用于设置管理员。
                 )
             )
             return
-        self.context.get_config()["admins_id"].append(admin_id)
+        self.context.get_config()["admins_id"].append(str(admin_id))
         self.context.get_config().save_config()
         event.set_result(MessageEventResult().message("授权成功。"))
 
@@ -296,7 +343,7 @@ UID: {user_id} 此 ID 可用于设置管理员。
     async def deop(self, event: AstrMessageEvent, admin_id: str):
         """取消授权管理员。deop <admin_id>"""
         try:
-            self.context.get_config()["admins_id"].remove(admin_id)
+            self.context.get_config()["admins_id"].remove(str(admin_id))
             self.context.get_config().save_config()
             event.set_result(MessageEventResult().message("取消授权成功。"))
         except ValueError:
@@ -314,7 +361,7 @@ UID: {user_id} 此 ID 可用于设置管理员。
                     "使用方法: /wl <id> 添加白名单；/dwl <id> 删除白名单。可通过 /sid 获取 ID。"
                 )
             )
-        self.context.get_config()["platform_settings"]["id_whitelist"].append(sid)
+        self.context.get_config()["platform_settings"]["id_whitelist"].append(str(sid))
         self.context.get_config().save_config()
         event.set_result(MessageEventResult().message("添加白名单成功。"))
 
@@ -323,7 +370,9 @@ UID: {user_id} 此 ID 可用于设置管理员。
     async def dwl(self, event: AstrMessageEvent, sid: str):
         """删除白名单。dwl <sid>"""
         try:
-            self.context.get_config()["platform_settings"]["id_whitelist"].remove(sid)
+            self.context.get_config()["platform_settings"]["id_whitelist"].remove(
+                str(sid)
+            )
             self.context.get_config().save_config()
             event.set_result(MessageEventResult().message("删除白名单成功。"))
         except ValueError:
@@ -492,15 +541,18 @@ UID: {user_id} 此 ID 可用于设置管理员。
                 MessageEventResult().message("未找到任何 LLM 提供商。请先配置。")
             )
             return
+        # 定义正则表达式匹配 API 密钥
+        api_key_pattern = re.compile(r"key=[^&'\" ]+")
 
         if idx_or_name is None:
             models = []
             try:
                 models = await self.context.get_using_provider().get_models()
             except BaseException as e:
+                err_msg = api_key_pattern.sub("key=***", str(e))
                 message.set_result(
                     MessageEventResult()
-                    .message("获取模型列表失败: " + str(e))
+                    .message("获取模型列表失败: " + err_msg)
                     .use_t2i(False)
                 )
                 return
@@ -698,6 +750,37 @@ UID: {user_id} 此 ID 可用于设置管理员。
             MessageEventResult().message(f"切换到新对话: 新对话({cid[:4]})。")
         )
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("groupnew")
+    async def groupnew_conv(self, message: AstrMessageEvent, sid: str):
+        """创建新群聊对话"""
+        provider = self.context.get_using_provider()
+        if provider and provider.meta().type == "dify":
+            assert isinstance(provider, ProviderDify)
+            await provider.forget(message.unified_msg_origin)
+            message.set_result(
+                MessageEventResult().message("成功，下次聊天将是新对话。")
+            )
+            return
+        if sid:
+            session = str(
+                MessageSesion(
+                    platform_name=message.platform_meta.name,
+                    message_type=MessageType("GroupMessage"),
+                    session_id=sid,
+                )
+            )
+            cid = await self.context.conversation_manager.new_conversation(session)
+            message.set_result(
+                MessageEventResult().message(
+                    f"群聊 {session} 已切换到新对话: 新对话({cid[:4]})。"
+                )
+            )
+        else:
+            message.set_result(
+                MessageEventResult().message("请输入群聊 ID。/groupnew 群聊ID。")
+            )
+
     @filter.command("switch")
     async def switch_conv(self, message: AstrMessageEvent, index: int = None):
         """通过 /ls 前面的序号切换对话"""
@@ -891,7 +974,8 @@ UID: {user_id} 此 ID 可用于设置管理员。
         if len(l) == 1:
             message.set_result(
                 MessageEventResult()
-                .message(f"""[Persona]
+                .message(
+                    f"""[Persona]
 
 - 人格情景列表: `/persona list`
 - 设置人格情景: `/persona 人格`
@@ -902,7 +986,8 @@ UID: {user_id} 此 ID 可用于设置管理员。
 当前对话 {curr_cid_title} 的人格情景: {curr_persona_name}
 
 配置人格情景请前往管理面板-配置页
-""")
+"""
+                )
                 .use_t2i(False)
             )
         elif l[1] == "list":
@@ -940,6 +1025,13 @@ UID: {user_id} 此 ID 可用于设置管理员。
             message.set_result(MessageEventResult().message("取消人格成功。"))
         else:
             ps = "".join(l[1:]).strip()
+            if not cid:
+                message.set_result(
+                    MessageEventResult().message(
+                        "当前没有对话，请先开始对话或使用 /new 创建一个对话。"
+                    )
+                )
+                return
             if persona := next(
                 builtins.filter(
                     lambda persona: persona["name"] == ps,
@@ -1105,11 +1197,20 @@ UID: {user_id} 此 ID 可用于设置管理员。
             user_info = f"\n[User ID: {user_id}, Nickname: {user_nickname}]\n"
             req.prompt = user_info + req.prompt
 
+        # 启用附加时间戳
         if self.enable_datetime:
-            # Including timezone
-            current_time = (
-                datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M (%Z)")
-            )
+            current_time = None
+            if self.timezone:
+                # 启用时区
+                try:
+                    now = datetime.datetime.now(zoneinfo.ZoneInfo(self.timezone))
+                    current_time = now.strftime("%Y-%m-%d %H:%M (%Z)")
+                except Exception as e:
+                    logger.error(f"时区设置错误: {e}, 使用本地时区")
+            if not current_time:
+                current_time = (
+                    datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M (%Z)")
+                )
             req.system_prompt += f"\nCurrent datetime: {current_time}\n"
 
         if req.conversation:
@@ -1131,7 +1232,7 @@ UID: {user_id} 此 ID 可用于设置管理员。
                 if mood_dialogs := persona["_mood_imitation_dialogs_processed"]:
                     req.system_prompt += "\nHere are few shots of dialogs, you need to imitate the tone of 'B' in the following dialogs to respond:\n"
                     req.system_prompt += mood_dialogs
-                if begin_dialogs := persona["_begin_dialogs_processed"]:
+                if (begin_dialogs := persona["_begin_dialogs_processed"]) and not req.contexts:
                     req.contexts[:0] = begin_dialogs
 
         if quote and quote.message_str:

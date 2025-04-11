@@ -10,7 +10,8 @@ from astrbot.api.provider import Provider, Personality
 from astrbot import logger
 from astrbot.core.provider.func_tool_manager import FuncCall
 from ..register import register_provider_adapter
-from astrbot.core.provider.entites import LLMResponse
+from astrbot.core.message.message_event_result import MessageChain
+from astrbot.core.provider.entities import LLMResponse, ToolCallsResult
 from .openai_source import ProviderOpenAIOfficial
 
 
@@ -72,18 +73,22 @@ class ProviderAnthropic(ProviderOpenAIOfficial):
         if content.type == "text":
             # text completion
             completion_text = str(content.text).strip()
-            llm_response.completion_text = completion_text
+            # llm_response.completion_text = completion_text
+            llm_response.result_chain = MessageChain().message(completion_text)
 
         # Anthropic每次只返回一个函数调用
         if completion.stop_reason == "tool_use":
             # tools call (function calling)
             args_ls = []
             func_name_ls = []
+            tool_use_ids = []
             func_name_ls.append(content.name)
             args_ls.append(content.input)
+            tool_use_ids.append(content.id)
             llm_response.role = "tool"
             llm_response.tools_call_args = args_ls
             llm_response.tools_call_name = func_name_ls
+            llm_response.tools_call_ids = tool_use_ids
 
         if not llm_response.completion_text and not llm_response.tools_call_args:
             logger.error(f"API 返回的 completion 无法解析：{completion}。")
@@ -101,6 +106,7 @@ class ProviderAnthropic(ProviderOpenAIOfficial):
         func_tool: FuncCall = None,
         contexts=[],
         system_prompt=None,
+        tool_calls_result: ToolCallsResult = None,
         **kwargs,
     ) -> LLMResponse:
         if not prompt:
@@ -112,6 +118,10 @@ class ProviderAnthropic(ProviderOpenAIOfficial):
         for part in context_query:
             if "_no_save" in part:
                 del part["_no_save"]
+
+        if tool_calls_result:
+            # 暂时这样写。
+            prompt += f"Here are the related results via using tools: {str(tool_calls_result.tool_calls_result)}"
 
         model_config = self.provider_config.get("model_config", {})
 
@@ -137,7 +147,7 @@ class ProviderAnthropic(ProviderOpenAIOfficial):
                             messages=context_query, **model_config
                         )
                         llm_response = LLMResponse("assistant")
-                        llm_response.completion_text = response.content[0].text
+                        llm_response.result_chain = MessageChain().message(response.content[0].text)
                         llm_response.raw_completion = response
                         return llm_response
                     except Exception as e:
@@ -151,6 +161,33 @@ class ProviderAnthropic(ProviderOpenAIOfficial):
                 raise e
 
         return llm_response
+
+    async def text_chat_stream(
+        self,
+        prompt,
+        session_id=None,
+        image_urls=...,
+        func_tool=None,
+        contexts=...,
+        system_prompt=None,
+        tool_calls_result=None,
+        **kwargs,
+    ):
+        # raise NotImplementedError("This method is not implemented yet.")
+        # 调用 text_chat 模拟流式
+        llm_response = await self.text_chat(
+            prompt=prompt,
+            session_id=session_id,
+            image_urls=image_urls,
+            func_tool=func_tool,
+            contexts=contexts,
+            system_prompt=system_prompt,
+            tool_calls_result=tool_calls_result,
+        )
+        llm_response.is_chunk = True
+        yield llm_response
+        llm_response.is_chunk = False
+        yield llm_response
 
     async def assemble_context(self, text: str, image_urls: List[str] = None):
         """组装上下文，支持文本和图片"""

@@ -20,7 +20,12 @@ DATAPATH = os.path.abspath(
 
 
 class AstrBotDashboard:
-    def __init__(self, core_lifecycle: AstrBotCoreLifecycle, db: BaseDatabase) -> None:
+    def __init__(
+        self,
+        core_lifecycle: AstrBotCoreLifecycle,
+        db: BaseDatabase,
+        shutdown_event: asyncio.Event,
+    ) -> None:
         self.core_lifecycle = core_lifecycle
         self.config = core_lifecycle.astrbot_config
         self.data_path = os.path.abspath(os.path.join(DATAPATH, "dist"))
@@ -45,6 +50,10 @@ class AstrBotDashboard:
         self.sfr = StaticFileRoute(self.context)
         self.ar = AuthRoute(self.context)
         self.chat_route = ChatRoute(self.context, db, core_lifecycle)
+        self.tools_root = ToolsRoute(self.context, core_lifecycle)
+        self.conversation_route = ConversationRoute(self.context, db, core_lifecycle)
+
+        self.shutdown_event = shutdown_event
 
     async def auth_middleware(self):
         if not request.path.startswith("/api"):
@@ -72,11 +81,6 @@ class AstrBotDashboard:
             r = jsonify(Response().error("Token 无效").__dict__)
             r.status_code = 401
             return r
-
-    async def shutdown_trigger_placeholder(self):
-        while not self.core_lifecycle.event_queue.closed:  # noqa: ASYNC110
-            await asyncio.sleep(1)
-        logger.info("管理面板已关闭。")
 
     def check_port_in_use(self, port: int) -> bool:
         """
@@ -120,12 +124,22 @@ class AstrBotDashboard:
             return f"获取进程信息失败: {str(e)}"
 
     def run(self):
-        try:
-            ip_addr = get_local_ip_addresses()
-        except Exception as _:
-            ip_addr = []
-
+        ip_addr = []
         port = self.core_lifecycle.astrbot_config["dashboard"].get("port", 6185)
+        host = self.core_lifecycle.astrbot_config["dashboard"].get("host", "0.0.0.0")
+
+        logger.info(f"正在启动 WebUI, 监听地址: http://{host}:{port}")
+
+        if host == "0.0.0.0":
+            logger.info(
+                "提示: WebUI 将监听所有网络接口，请注意安全。（可在 data/cmd_config.json 中配置 dashboard.host 以修改 host）"
+            )
+
+        if host not in ["localhost", "127.0.0.1"]:
+            try:
+                ip_addr = get_local_ip_addresses()
+            except Exception as _:
+                pass
         if isinstance(port, str):
             port = int(port)
 
@@ -142,15 +156,23 @@ class AstrBotDashboard:
 
             raise Exception(f"端口 {port} 已被占用")
 
-        display = f"\n ✨✨✨\n  AstrBot v{VERSION} 管理面板已启动，可访问\n\n"
+        display = f"\n ✨✨✨\n  AstrBot v{VERSION} WebUI 已启动，可访问\n\n"
         display += f"   ➜  本地: http://localhost:{port}\n"
         for ip in ip_addr:
             display += f"   ➜  网络: http://{ip}:{port}\n"
         display += "   ➜  默认用户名和密码: astrbot\n ✨✨✨\n"
+
+        if not ip_addr:
+            display += (
+                "可在 data/cmd_config.json 中配置 dashboard.host 以便远程访问。\n"
+            )
+
         logger.info(display)
 
         return self.app.run_task(
-            host="0.0.0.0",
-            port=port,
-            shutdown_trigger=self.shutdown_trigger_placeholder,
+            host=host, port=port, shutdown_trigger=self.shutdown_trigger
         )
+
+    async def shutdown_trigger(self):
+        await self.shutdown_event.wait()
+        logger.info("AstrBot WebUI 已经被优雅地关闭")

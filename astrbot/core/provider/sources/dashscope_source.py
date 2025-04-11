@@ -1,11 +1,13 @@
+import re
 import asyncio
 import functools
 from typing import List
 from .. import Provider, Personality
-from ..entites import LLMResponse
+from ..entities import LLMResponse
 from ..func_tool_manager import FuncCall
 from astrbot.core.db import BaseDatabase
 from ..register import register_provider_adapter
+from astrbot.core.message.message_event_result import MessageChain
 from .openai_source import ProviderOpenAIOfficial
 from astrbot.core import logger, sp
 from dashscope import Application
@@ -40,10 +42,27 @@ class ProviderDashscope(ProviderOpenAIOfficial):
             raise Exception("阿里云百炼 APP 类型不能为空。")
         self.model_name = "dashscope"
         self.variables: dict = provider_config.get("variables", {})
+        self.rag_options: dict = provider_config.get("rag_options", {})
+        self.output_reference = self.rag_options.get("output_reference", False)
+        self.rag_options = self.rag_options.copy()
+        self.rag_options.pop("output_reference", None)
 
         self.timeout = provider_config.get("timeout", 120)
         if isinstance(self.timeout, str):
             self.timeout = int(self.timeout)
+
+    def has_rag_options(self):
+        """判断是否有 RAG 选项
+
+        Returns:
+            bool: 是否有 RAG 选项
+        """
+        if self.rag_options and (
+            len(self.rag_options.get("pipeline_ids", [])) > 0
+            or len(self.rag_options.get("file_ids", [])) > 0
+        ):
+            return True
+        return False
 
     async def text_chat(
         self,
@@ -62,7 +81,10 @@ class ProviderDashscope(ProviderOpenAIOfficial):
         session_var = session_vars.get(session_id, {})
         payload_vars.update(session_var)
 
-        if self.dashscope_app_type in ["agent", "dialog-workflow"]:
+        if (
+            self.dashscope_app_type in ["agent", "dialog-workflow"]
+            and not self.has_rag_options()
+        ):
             # 支持多轮对话的
             new_record = {"role": "user", "content": prompt}
             if image_urls:
@@ -75,23 +97,31 @@ class ProviderDashscope(ProviderOpenAIOfficial):
                 if "_no_save" in part:
                     del part["_no_save"]
             # 调用阿里云百炼 API
+            payload = {
+                "app_id": self.app_id,
+                "api_key": self.api_key,
+                "messages": context_query,
+                "biz_params": payload_vars or None,
+            }
             partial = functools.partial(
                 Application.call,
-                app_id=self.app_id,
-                api_key=self.api_key,
-                messages=context_query,
-                biz_params=payload_vars or None,
+                **payload,
             )
             response = await asyncio.get_event_loop().run_in_executor(None, partial)
         else:
             # 不支持多轮对话的
             # 调用阿里云百炼 API
+            payload = {
+                "app_id": self.app_id,
+                "prompt": prompt,
+                "api_key": self.api_key,
+                "biz_params": payload_vars or None,
+            }
+            if self.rag_options:
+                payload["rag_options"] = self.rag_options
             partial = functools.partial(
                 Application.call,
-                app_id=self.app_id,
-                promtp=prompt,
-                api_key=self.api_key,
-                biz_params=payload_vars or None,
+                **payload,
             )
             response = await asyncio.get_event_loop().run_in_executor(None, partial)
 
@@ -103,11 +133,56 @@ class ProviderDashscope(ProviderOpenAIOfficial):
             )
             return LLMResponse(
                 role="err",
-                completion_text=f"阿里云百炼请求失败: message={response.message} code={response.status_code}",
+                result_chain=MessageChain().message(
+                    f"阿里云百炼请求失败: message={response.message} code={response.status_code}"
+                ),
             )
 
         output_text = response.output.get("text", "")
-        return LLMResponse(role="assistant", completion_text=output_text)
+        # RAG 引用脚标格式化
+        output_text = re.sub(r"<ref>\[(\d+)\]</ref>", r"[\1]", output_text)
+        if self.output_reference and response.output.get("doc_references", None):
+            ref_str = ""
+            for ref in response.output.get("doc_references", []):
+                ref_title = (
+                    ref.get("title", "")
+                    if ref.get("title")
+                    else ref.get("doc_name", "")
+                )
+                ref_str += f"{ref['index_id']}. {ref_title}\n"
+            output_text += f"\n\n回答来源:\n{ref_str}"
+
+        llm_response = LLMResponse("assistant")
+        llm_response.result_chain = MessageChain().message(output_text)
+
+        return llm_response
+
+    async def text_chat_stream(
+        self,
+        prompt,
+        session_id=None,
+        image_urls=...,
+        func_tool=None,
+        contexts=...,
+        system_prompt=None,
+        tool_calls_result=None,
+        **kwargs,
+    ):
+        # raise NotImplementedError("This method is not implemented yet.")
+        # 调用 text_chat 模拟流式
+        llm_response = await self.text_chat(
+            prompt=prompt,
+            session_id=session_id,
+            image_urls=image_urls,
+            func_tool=func_tool,
+            contexts=contexts,
+            system_prompt=system_prompt,
+            tool_calls_result=tool_calls_result,
+        )
+        llm_response.is_chunk = True
+        yield llm_response
+        llm_response.is_chunk = False
+        yield llm_response
 
     async def forget(self, session_id):
         return True

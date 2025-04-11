@@ -2,6 +2,8 @@ import base64
 import asyncio
 import json
 import re
+import uuid
+import astrbot.api.message_components as Comp
 
 from astrbot.api.platform import (
     Platform,
@@ -11,7 +13,6 @@ from astrbot.api.platform import (
     PlatformMetadata,
 )
 from astrbot.api.event import MessageChain
-from astrbot.api.message_components import Image, Plain, At
 from astrbot.core.platform.astr_message_event import MessageSesion
 from .lark_event import LarkMessageEvent
 from ...register import register_platform_adapter
@@ -66,12 +67,47 @@ class LarkPlatformAdapter(Platform):
     async def send_by_session(
         self, session: MessageSesion, message_chain: MessageChain
     ):
-        raise NotImplementedError("Lark 适配器不支持 send_by_session")
+        res = await LarkMessageEvent._convert_to_lark(message_chain, self.lark_api)
+        wrapped = {
+            "zh_cn": {
+                "title": "",
+                "content": res,
+            }
+        }
+
+        if session.message_type == MessageType.GROUP_MESSAGE:
+            id_type = "chat_id"
+            if "%" in session.session_id:
+                session.session_id = session.session_id.split("%")[1]
+        else:
+            id_type = "open_id"
+
+        request = (
+            CreateMessageRequest.builder()
+            .receive_id_type(id_type)
+            .request_body(
+                CreateMessageRequestBody.builder()
+                .receive_id(session.session_id)
+                .content(json.dumps(wrapped))
+                .msg_type("post")
+                .uuid(str(uuid.uuid4()))
+                .build()
+            )
+            .build()
+        )
+
+        response = await self.lark_api.im.v1.message.acreate(request)
+
+        if not response.success():
+            logger.error(f"发送飞书消息失败({response.code}): {response.msg}")
+
+        await super().send_by_session(session, message_chain)
 
     def meta(self) -> PlatformMetadata:
         return PlatformMetadata(
-            "lark",
-            "飞书机器人官方 API 适配器",
+            name="lark",
+            description="飞书机器人官方 API 适配器",
+            id=self.config.get("id"),
         )
 
     async def convert_msg(self, event: lark.im.v1.P2ImMessageReceiveV1):
@@ -92,7 +128,7 @@ class LarkPlatformAdapter(Platform):
         at_list = {}
         if message.mentions:
             for m in message.mentions:
-                at_list[m.key] = At(qq=m.id.open_id, name=m.name)
+                at_list[m.key] = Comp.At(qq=m.id.open_id, name=m.name)
                 if m.name == self.bot_name:
                     abm.self_id = m.id.open_id
 
@@ -111,7 +147,7 @@ class LarkPlatformAdapter(Platform):
                 if s in at_list:
                     abm.message.append(at_list[s])
                 else:
-                    abm.message.append(Plain(parts[i].strip()))
+                    abm.message.append(Comp.Plain(parts[i].strip()))
         elif message.message_type == "post":
             _ls = []
 
@@ -132,7 +168,7 @@ class LarkPlatformAdapter(Platform):
                 if comp["tag"] == "at":
                     abm.message.append(at_list[comp["user_id"]])
                 elif comp["tag"] == "text" and comp["text"].strip():
-                    abm.message.append(Plain(comp["text"].strip()))
+                    abm.message.append(Comp.Plain(comp["text"].strip()))
                 elif comp["tag"] == "img":
                     image_key = comp["image_key"]
                     request = (
@@ -147,10 +183,10 @@ class LarkPlatformAdapter(Platform):
                         logger.error(f"无法下载飞书图片: {image_key}")
                     image_bytes = response.file.read()
                     image_base64 = base64.b64encode(image_bytes).decode()
-                    abm.message.append(Image.fromBase64(image_base64))
+                    abm.message.append(Comp.Image.fromBase64(image_base64))
 
         for comp in abm.message:
-            if isinstance(comp, Plain):
+            if isinstance(comp, Comp.Plain):
                 abm.message_str += comp.text
         abm.message_id = message.message_id
         abm.raw_message = message
@@ -165,7 +201,10 @@ class LarkPlatformAdapter(Platform):
             else:
                 abm.session_id = abm.sender.user_id
         else:
-            abm.session_id = abm.sender.user_id
+            if abm.type == MessageType.GROUP_MESSAGE:
+                abm.session_id = f"{abm.sender.user_id}%{abm.group_id}"  # 也保留群组id
+            else:
+                abm.session_id = abm.sender.user_id
 
         logger.debug(abm)
         await self.handle_msg(abm)
@@ -184,6 +223,10 @@ class LarkPlatformAdapter(Platform):
     async def run(self):
         # self.client.start()
         await self.client._connect()
+
+    async def terminate(self):
+        await self.client._disconnect()
+        logger.info("飞书(Lark) 适配器已被优雅地关闭")
 
     def get_client(self) -> lark.Client:
         return self.client

@@ -5,15 +5,18 @@ import axios from 'axios';
 import { md5 } from 'js-md5';
 import { useAuthStore } from '@/stores/auth';
 import { useCommonStore } from '@/stores/common';
+import { marked } from 'marked';
 
 const customizer = useCustomizerStore();
 let dialog = ref(false);
+let accountWarning = ref(false)
 let updateStatusDialog = ref(false);
 let password = ref('');
 let newPassword = ref('');
 let newUsername = ref('');
 let status = ref('');
 let updateStatus = ref('')
+let releaseMessage = ref('');
 let hasNewVersion = ref(false);
 let botCurrVersion = ref('');
 let dashboardHasNewVersion = ref(false);
@@ -80,7 +83,13 @@ function checkUpdate() {
   axios.get('/api/update/check')
     .then((res) => {
       hasNewVersion.value = res.data.data.has_new_version;
-      updateStatus.value = res.data.message;
+
+      if (res.data.data.has_new_version) {
+        releaseMessage.value = res.data.message;
+        updateStatus.value = '有新版本！';
+      } else {
+        updateStatus.value = res.data.message;
+      }
       botCurrVersion.value = res.data.data.version;
       dashboardCurrentVersion.value = res.data.data.dashboard_version;
       dashboardHasNewVersion.value = res.data.data.dashboard_has_new_version;
@@ -175,8 +184,16 @@ function updateDashboard() {
 checkUpdate();
 
 const commonStore = useCommonStore();
-commonStore.createWebSocket();
+commonStore.createEventSource(); // log
 commonStore.getStartTime();
+
+
+if (localStorage.getItem('change_pwd_hint') != null && localStorage.getItem('change_pwd_hint') == 'true') {
+  dialog.value = true;
+  accountWarning.value = true;
+  localStorage.removeItem('change_pwd_hint');
+}
+
 </script>
 
 <template>
@@ -217,15 +234,23 @@ commonStore.getStartTime();
         <v-card-text>
           <v-container>
             <v-progress-linear v-show="installLoading" class="mb-4" indeterminate color="primary"></v-progress-linear>
-            
+
             <div>
               <h1 style="display:inline-block;">{{ botCurrVersion }}</h1>
               <small style="margin-left: 4px;">{{ updateStatus }}</small>
             </div>
 
+            <div
+              style="background-color: #646cff24; padding: 16px; border-radius: 10px; font-size: 14px; max-height: 400px; overflow-y: auto;"
+              v-html="marked(releaseMessage)" class="markdown-content">
+
+            </div>
+
             <div class="mb-4 mt-4">
-              <small>💡 TIP: 跳到旧版本或者切换到某个版本不会重新下载管理面板文件，这可能会造成部分数据显示错误。您可在 <a href="https://github.com/Soulter/AstrBot/releases">此处</a>
-                找到对应的面板文件 dist.zip，解压后替换 data/dist 文件夹即可。当然，前端源代码在 dashboard 目录下，你也可以自己使用 npm install 和 npm build 构建。</small>
+              <small>💡 TIP: 跳到旧版本或者切换到某个版本不会重新下载管理面板文件，这可能会造成部分数据显示错误。您可在 <a
+                  href="https://github.com/Soulter/AstrBot/releases">此处</a>
+                找到对应的面板文件 dist.zip，解压后替换 data/dist 文件夹即可。当然，前端源代码在 dashboard 目录下，你也可以自己使用 npm install 和 npm build
+                构建。</small>
             </div>
 
             <v-tabs v-model="tab">
@@ -260,7 +285,7 @@ commonStore.getStartTime();
                   </template>
                 </v-data-table>
               </v-tabs-window-item>
-              
+
               <!-- 开发版 -->
               <v-tabs-window-item key="1" v-show="tab == 1">
                 <div style="margin-top: 16px;">
@@ -310,7 +335,8 @@ commonStore.getStartTime();
                 </p>
               </div>
 
-              <v-btn color="primary" style="border-radius: 10px;" @click="updateDashboard()" :disabled="!dashboardHasNewVersion">
+              <v-btn color="primary" style="border-radius: 10px;" @click="updateDashboard()"
+                :disabled="!dashboardHasNewVersion">
                 下载并更新
               </v-btn>
             </div>
@@ -339,6 +365,11 @@ commonStore.getStartTime();
           <v-container>
             <v-row>
               <v-col cols="12">
+
+                <v-alert v-if="accountWarning" color="warning" style="margin-bottom: 16px;">
+                  <div>为了安全，请尽快修改默认密码。</div>
+                </v-alert>
+
                 <v-text-field label="原密码*" type="password" v-model="password" required
                   variant="outlined"></v-text-field>
 
@@ -366,3 +397,23 @@ commonStore.getStartTime();
     </v-dialog>
   </v-app-bar>
 </template>
+
+<style>
+.markdown-content h1 {
+  font-size: 1.3em;
+}
+
+.markdown-content ol {
+  padding-left: 24px;
+  /* Adds indentation to ordered lists */
+  margin-top: 8px;
+  margin-bottom: 8px;
+}
+
+.markdown-content ul {
+  padding-left: 24px;
+  /* Adds indentation to unordered lists */
+  margin-top: 8px;
+  margin-bottom: 8px;
+}
+</style>

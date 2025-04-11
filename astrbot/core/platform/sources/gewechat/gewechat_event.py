@@ -2,12 +2,21 @@ import wave
 import uuid
 import traceback
 import os
-from astrbot.core.utils.io import save_temp_img, download_image_by_url, download_file
+
+from astrbot.core.utils.io import save_temp_img, download_file
 from astrbot.core.utils.tencent_record_helper import wav_to_tencent_silk
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, MessageChain
-from astrbot.api.platform import AstrBotMessage, PlatformMetadata
-from astrbot.api.message_components import Plain, Image, Record, At, File
+from astrbot.api.platform import AstrBotMessage, PlatformMetadata, Group, MessageMember
+from astrbot.api.message_components import (
+    Plain,
+    Image,
+    Record,
+    At,
+    File,
+    Video,
+    WechatEmoji as Emoji,
+)
 from .client import SimpleGewechatClient
 
 
@@ -70,18 +79,10 @@ class GewechatPlatformEvent(AstrMessageEvent):
                 await client.post_text(**payload)
 
             elif isinstance(comp, Image):
-                img_url = comp.file
-                img_path = ""
-                if img_url.startswith("file:///"):
-                    img_path = img_url[8:]
-                elif comp.file and comp.file.startswith("http"):
-                    img_path = await download_image_by_url(comp.file)
-                else:
-                    img_path = img_url
+                img_path = await comp.convert_to_file_path()
 
-                # 检查 record_path 是否在 data/temp 目录中, record_path 可能是绝对路径
+                # 检查 record_path 是否在 data/temp 目录中
                 temp_directory = os.path.abspath("data/temp")
-                img_path = os.path.abspath(img_path)
                 if os.path.commonpath([temp_directory, img_path]) != temp_directory:
                     with open(img_path, "rb") as f:
                         img_path = save_temp_img(f.read())
@@ -90,17 +91,65 @@ class GewechatPlatformEvent(AstrMessageEvent):
                 img_url = f"{client.file_server_url}/{file_id}"
                 logger.debug(f"gewe callback img url: {img_url}")
                 await client.post_image(to_wxid, img_url)
+            elif isinstance(comp, Video):
+                if comp.cover != "":
+                    await client.forward_video(to_wxid, comp.cover)
+                else:
+                    try:
+                        from pyffmpeg import FFmpeg
+                    except (ImportError, ModuleNotFoundError):
+                        logger.error(
+                            "需要安装 pyffmpeg 库才能发送视频: pip install pyffmpeg"
+                        )
+                        raise ModuleNotFoundError(
+                            "需要安装 pyffmpeg 库才能发送视频: pip install pyffmpeg"
+                        )
+
+                    video_url = comp.file
+                    # 根据 url 下载视频
+                    video_filename = f"{uuid.uuid4()}.mp4"
+                    video_path = f"data/temp/{video_filename}"
+                    await download_file(video_url, video_path)
+
+                    # 获取视频第一帧
+                    thumb_path = f"data/temp/{uuid.uuid4()}.jpg"
+                    try:
+                        ff = FFmpeg()
+                        command = f'-i "{video_path}" -ss 0 -vframes 1 "{thumb_path}"'
+                        ff.options(command)
+                        thumb_file_id = os.path.basename(thumb_path)
+                        thumb_url = f"{client.file_server_url}/{thumb_file_id}"
+                    except Exception as e:
+                        logger.error(f"获取视频第一帧失败: {e}")
+                    # 获取视频时长
+                    try:
+                        from pyffmpeg import FFprobe
+
+                        # 创建 FFprobe 实例
+                        ffprobe = FFprobe(video_url)
+                        # 获取时长字符串
+                        duration_str = ffprobe.duration
+                        # 处理时长字符串
+                        video_duration = float(duration_str.replace(":", ""))
+                    except Exception as e:
+                        logger.error(f"获取时长失败: {e}")
+                        video_duration = 10
+
+                    file_id = os.path.basename(video_path)
+                    video_url = f"{client.file_server_url}/{file_id}"
+                    await client.post_video(
+                        to_wxid, video_url, thumb_url, video_duration
+                    )
+
+                    # 删除临时视频和缩略图文件
+                    if os.path.exists(video_path):
+                        os.remove(video_path)
+                    if os.path.exists(thumb_path):
+                        os.remove(thumb_path)
             elif isinstance(comp, Record):
                 # 默认已经存在 data/temp 中
                 record_url = comp.file
-                record_path = ""
-
-                if record_url.startswith("file:///"):
-                    record_path = record_url[8:]
-                elif record_url.startswith("http"):
-                    await download_file(record_url, f"data/temp/{uuid.uuid4()}.wav")
-                else:
-                    record_path = record_url
+                record_path = await comp.convert_to_file_path()
 
                 silk_path = f"data/temp/{uuid.uuid4()}.silk"
                 try:
@@ -129,6 +178,8 @@ class GewechatPlatformEvent(AstrMessageEvent):
                 file_url = f"{client.file_server_url}/{file_id}"
                 logger.debug(f"gewe callback file url: {file_url}")
                 await client.post_file(to_wxid, file_url, file_id)
+            elif isinstance(comp, Emoji):
+                await client.post_emoji(to_wxid, comp.md5, comp.md5_len, comp.cdnurl)
             elif isinstance(comp, At):
                 pass
             else:
@@ -138,3 +189,43 @@ class GewechatPlatformEvent(AstrMessageEvent):
         to_wxid = self.message_obj.raw_message.get("to_wxid", None)
         await GewechatPlatformEvent.send_with_client(message, to_wxid, self.client)
         await super().send(message)
+
+    async def get_group(self, group_id=None, **kwargs):
+        # 确定有效的 group_id
+        if group_id is None:
+            group_id = self.get_group_id()
+
+        if not group_id:
+            return None
+
+        res = await self.client.get_group(group_id)
+        data: dict = res["data"]
+
+        if not data["chatroomId"]:
+            return None
+
+        members = [
+            MessageMember(user_id=member["wxid"], nickname=member["nickName"])
+            for member in data.get("memberList", [])
+        ]
+
+        return Group(
+            group_id=data["chatroomId"],
+            group_name=data.get("nickName"),
+            group_avatar=data.get("smallHeadImgUrl"),
+            group_owner=data.get("chatRoomOwner"),
+            members=members,
+        )
+
+    async def send_streaming(self, generator):
+        buffer = None
+        async for chain in generator:
+            if not buffer:
+                buffer = chain
+            else:
+                buffer.chain.extend(chain.chain)
+        if not buffer:
+            return
+        buffer.squash_plain()
+        await self.send(buffer)
+        return await super().send_streaming(generator)

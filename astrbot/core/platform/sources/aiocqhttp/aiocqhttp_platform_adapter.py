@@ -39,11 +39,10 @@ class AiocqhttpAdapter(Platform):
         self.port = platform_config["ws_reverse_port"]
 
         self.metadata = PlatformMetadata(
-            "aiocqhttp",
-            "适用于 OneBot 标准的消息平台适配器，支持反向 WebSockets。",
+            name="aiocqhttp",
+            description="适用于 OneBot 标准的消息平台适配器，支持反向 WebSockets。",
+            id=self.config.get("id"),
         )
-
-        self.stop = False
 
         self.bot = CQHttp(
             use_ws_reverse=True, import_name="aiocqhttp", api_timeout_sec=180
@@ -111,7 +110,7 @@ class AiocqhttpAdapter(Platform):
         """OneBot V11 请求类事件"""
         abm = AstrBotMessage()
         abm.self_id = str(event.self_id)
-        abm.sender = MessageMember(user_id=event.user_id, nickname=event.user_id)
+        abm.sender = MessageMember(user_id=str(event.user_id), nickname=event.user_id)
         abm.type = MessageType.OTHER_MESSAGE
         if "group_id" in event and event["group_id"]:
             abm.type = MessageType.GROUP_MESSAGE
@@ -131,7 +130,7 @@ class AiocqhttpAdapter(Platform):
         """OneBot V11 通知类事件"""
         abm = AstrBotMessage()
         abm.self_id = str(event.self_id)
-        abm.sender = MessageMember(user_id=event.user_id, nickname=event.user_id)
+        abm.sender = MessageMember(user_id=str(event.user_id), nickname=event.user_id)
         abm.type = MessageType.OTHER_MESSAGE
         if "group_id" in event and event["group_id"]:
             abm.group_id = str(event.group_id)
@@ -303,21 +302,18 @@ class AiocqhttpAdapter(Platform):
         for handler in logging.root.handlers[:]:
             logging.root.removeHandler(handler)
         logging.getLogger("aiocqhttp").setLevel(logging.ERROR)
-
+        self.shutdown_event = asyncio.Event()
         return coro
 
     async def terminate(self):
-        self.stop = True
-        await asyncio.sleep(1)
+        self.shutdown_event.set()
+
+    async def shutdown_trigger_placeholder(self):
+        await self.shutdown_event.wait()
+        logger.info("aiocqhttp 适配器已被优雅地关闭")
 
     def meta(self) -> PlatformMetadata:
         return self.metadata
-
-    async def shutdown_trigger_placeholder(self):
-        # TODO: use asyncio.Event
-        while not self._event_queue.closed and not self.stop:  # noqa: ASYNC110
-            await asyncio.sleep(1)
-        logger.info("aiocqhttp 适配器已关闭。")
 
     async def handle_msg(self, message: AstrBotMessage):
         message_event = AiocqhttpMessageEvent(

@@ -25,9 +25,11 @@ SOFTWARE.
 import base64
 import json
 import os
+import uuid
 import typing as T
 from enum import Enum
 from pydantic.v1 import BaseModel
+from astrbot.core.utils.io import download_image_by_url, file_to_base64
 
 
 class ComponentType(Enum):
@@ -58,6 +60,8 @@ class ComponentType(Enum):
     CardImage = "CardImage"
     TTS = "TTS"
     Unknown = "Unknown"
+
+    WechatEmoji = "WechatEmoji"  # Wechat 下的 emoji 表情包
 
 
 class BaseMessageComponent(BaseModel):
@@ -145,6 +149,51 @@ class Record(BaseMessageComponent):
         if url.startswith("http://") or url.startswith("https://"):
             return Record(file=url, **_)
         raise Exception("not a valid url")
+
+    async def convert_to_file_path(self) -> str:
+        """将这个语音统一转换为本地文件路径。这个方法避免了手动判断语音数据类型，直接返回语音数据的本地路径（如果是网络 URL, 则会自动进行下载）。
+
+        Returns:
+            str: 语音的本地路径，以绝对路径表示。
+        """
+        if self.file and self.file.startswith("file:///"):
+            file_path = self.file[8:]
+            return file_path
+        elif self.file and self.file.startswith("http"):
+            file_path = await download_image_by_url(self.file)
+            return os.path.abspath(file_path)
+        elif self.file and self.file.startswith("base64://"):
+            bs64_data = self.file.removeprefix("base64://")
+            image_bytes = base64.b64decode(bs64_data)
+            file_path = f"data/temp/{uuid.uuid4()}.jpg"
+            with open(file_path, "wb") as f:
+                f.write(image_bytes)
+            return os.path.abspath(file_path)
+        elif os.path.exists(self.file):
+            file_path = self.file
+            return os.path.abspath(file_path)
+        else:
+            raise Exception(f"not a valid file: {self.file}")
+
+    async def convert_to_base64(self) -> str:
+        """将语音统一转换为 base64 编码。这个方法避免了手动判断语音数据类型，直接返回语音数据的 base64 编码。
+
+        Returns:
+            str: 语音的 base64 编码，不以 base64:// 或者 data:image/jpeg;base64, 开头。
+        """
+        # convert to base64
+        if self.file and self.file.startswith("file:///"):
+            bs64_data = file_to_base64(self.file[8:])
+        elif self.file and self.file.startswith("http"):
+            file_path = await download_image_by_url(self.file)
+            bs64_data = file_to_base64(file_path)
+        elif self.file and self.file.startswith("base64://"):
+            bs64_data = self.file
+        elif os.path.exists(self.file):
+            bs64_data = file_to_base64(self.file)
+        else:
+            raise Exception(f"not a valid file: {self.file}")
+        return bs64_data
 
 
 class Video(BaseMessageComponent):
@@ -279,10 +328,6 @@ class Image(BaseMessageComponent):
     file_unique: T.Optional[str] = ""  # 某些平台可能有图片缓存的唯一标识
 
     def __init__(self, file: T.Optional[str], **_):
-        # for k in _.keys():
-        #     if (k == "_type" and _[k] not in ["flash", "show", None]) or \
-        #             (k == "c" and _[k] not in [2, 3]):
-        #         logger.warn(f"Protocol: {k}={_[k]} doesn't match values")
         super().__init__(file=file, **_)
 
     @staticmethod
@@ -307,6 +352,53 @@ class Image(BaseMessageComponent):
     def fromIO(IO):
         return Image.fromBytes(IO.read())
 
+    async def convert_to_file_path(self) -> str:
+        """将这个图片统一转换为本地文件路径。这个方法避免了手动判断图片数据类型，直接返回图片数据的本地路径（如果是网络 URL, 则会自动进行下载）。
+
+        Returns:
+            str: 图片的本地路径，以绝对路径表示。
+        """
+        url = self.url if self.url else self.file
+        if url and url.startswith("file:///"):
+            image_file_path = url[8:]
+            return image_file_path
+        elif url and url.startswith("http"):
+            image_file_path = await download_image_by_url(url)
+            return os.path.abspath(image_file_path)
+        elif url and url.startswith("base64://"):
+            bs64_data = url.removeprefix("base64://")
+            image_bytes = base64.b64decode(bs64_data)
+            image_file_path = f"data/temp/{uuid.uuid4()}.jpg"
+            with open(image_file_path, "wb") as f:
+                f.write(image_bytes)
+            return os.path.abspath(image_file_path)
+        elif os.path.exists(url):
+            image_file_path = url
+            return os.path.abspath(image_file_path)
+        else:
+            raise Exception(f"not a valid file: {url}")
+
+    async def convert_to_base64(self) -> str:
+        """将这个图片统一转换为 base64 编码。这个方法避免了手动判断图片数据类型，直接返回图片数据的 base64 编码。
+
+        Returns:
+            str: 图片的 base64 编码，不以 base64:// 或者 data:image/jpeg;base64, 开头。
+        """
+        # convert to base64
+        url = self.url if self.url else self.file
+        if url and url.startswith("file:///"):
+            bs64_data = file_to_base64(url[8:])
+        elif url and url.startswith("http"):
+            image_file_path = await download_image_by_url(url)
+            bs64_data = file_to_base64(image_file_path)
+        elif url and url.startswith("base64://"):
+            bs64_data = url
+        elif os.path.exists(url):
+            bs64_data = file_to_base64(url)
+        else:
+            raise Exception(f"not a valid file: {url}")
+        return bs64_data
+
 
 class Reply(BaseMessageComponent):
     type: ComponentType = "Reply"
@@ -322,6 +414,8 @@ class Reply(BaseMessageComponent):
     """引用的消息发送时间"""
     message_str: T.Optional[str] = ""
     """解析后的纯文本消息字符串"""
+    sender_str: T.Optional[str] = ""
+    """被引用的消息纯文本"""
 
     text: T.Optional[str] = ""
     """deprecated"""
@@ -469,6 +563,16 @@ class File(BaseMessageComponent):
         super().__init__(name=name, file=file)
 
 
+class WechatEmoji(BaseMessageComponent):
+    type: ComponentType = "WechatEmoji"
+    md5: T.Optional[str] = ""
+    md5_len: T.Optional[int] = 0
+    cdnurl: T.Optional[str] = ""
+
+    def __init__(self, **_):
+        super().__init__(**_)
+
+
 ComponentTypes = {
     "plain": Plain,
     "text": Plain,
@@ -497,4 +601,5 @@ ComponentTypes = {
     "tts": TTS,
     "unknown": Unknown,
     "file": File,
+    "WechatEmoji": WechatEmoji,
 }

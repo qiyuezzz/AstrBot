@@ -6,6 +6,7 @@ from astrbot.core.updator import AstrBotUpdator
 from astrbot.core import logger, pip_installer
 from astrbot.core.utils.io import download_dashboard, get_dashboard_version
 from astrbot.core.config.default import VERSION
+from astrbot.core import DEMO_MODE
 
 
 class UpdateRoute(Route):
@@ -95,8 +96,7 @@ class UpdateRoute(Route):
                 logger.error(f"更新依赖失败: {e}")
 
             if reboot:
-                # threading.Thread(target=self.astrbot_updator._reboot, args=(2, )).start()
-                self.core_lifecycle.restart()
+                await self.core_lifecycle.restart()
                 return (
                     Response()
                     .ok(None, "更新成功，AstrBot 将在 2 秒内全量重启以应用新的代码。")
@@ -127,6 +127,13 @@ class UpdateRoute(Route):
             return Response().error(e.__str__()).__dict__
 
     async def install_pip_package(self):
+        if DEMO_MODE:
+            return (
+                Response()
+                .error("You are not permitted to do this operation in demo mode")
+                .__dict__
+            )
+
         data = await request.json
         package = data.get("package", "")
         if not package:

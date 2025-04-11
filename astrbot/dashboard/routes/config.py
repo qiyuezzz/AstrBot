@@ -12,8 +12,11 @@ from astrbot.core import logger
 
 
 def try_cast(value: str, type_: str):
-    if type_ == "int" and value.isdigit():
-        return int(value)
+    if type_ == "int":
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            return None
     elif (
         type_ == "float"
         and isinstance(value, str)
@@ -22,6 +25,11 @@ def try_cast(value: str, type_: str):
         return float(value)
     elif type_ == "float" and isinstance(value, int):
         return float(value)
+    elif type_ == "float":
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return None
 
 
 def validate_config(
@@ -29,20 +37,50 @@ def validate_config(
 ) -> typing.Tuple[typing.List[str], typing.Dict]:
     errors = []
 
-    def validate(data, metadata=schema, path=""):
-        for key, meta in metadata.items():
-            if key not in data:
+    def validate(data: dict, metadata: dict = schema, path=""):
+        for key, value in data.items():
+            if key not in metadata:
+                # 无 schema 的配置项，执行类型猜测
+                if isinstance(value, str):
+                    try:
+                        data[key] = int(value)
+                        continue
+                    except ValueError:
+                        pass
+
+                    try:
+                        data[key] = float(value)
+                        continue
+                    except ValueError:
+                        pass
+
+                    if value.lower() == "true":
+                        data[key] = True
+                    elif value.lower() == "false":
+                        data[key] = False
                 continue
-            value = data[key]
+            meta = metadata[key]
+            if "type" not in meta:
+                logger.debug(f"配置项 {path}{key} 没有类型定义, 跳过校验")
+                continue
             # null 转换
             if value is None:
                 data[key] = DEFAULT_VALUE_MAP[meta["type"]]
                 continue
-            # 递归验证
             if meta["type"] == "list" and not isinstance(value, list):
                 errors.append(
                     f"错误的类型 {path}{key}: 期望是 list, 得到了 {type(value).__name__}"
                 )
+            elif (
+                meta["type"] == "list"
+                and isinstance(value, list)
+                and value
+                and "items" in meta
+                and isinstance(value[0], dict)
+            ):
+                # 当前仅针对 list[dict] 的情况进行类型校验，以适配 AstrBot 中 platform、provider 的配置
+                for item in value:
+                    validate(item, meta["items"], path=f"{path}{key}.")
             elif meta["type"] == "object" and isinstance(value, dict):
                 validate(value, meta["items"], path=f"{path}{key}.")
 
@@ -76,7 +114,6 @@ def validate_config(
                 errors.append(
                     f"错误的类型 {path}{key}: 期望是 dict, 得到了 {type(value).__name__}"
                 )
-                validate(value, meta["items"], path=f"{path}{key}.")
 
     if is_core:
         for key, group in schema.items():
@@ -126,6 +163,7 @@ class ConfigRoute(Route):
             "/config/provider/new": ("POST", self.post_new_provider),
             "/config/provider/update": ("POST", self.post_update_provider),
             "/config/provider/delete": ("POST", self.post_delete_provider),
+            "/config/llmtools": ("GET", self.get_llm_tools),
         }
         self.register_routes()
 
@@ -143,7 +181,7 @@ class ConfigRoute(Route):
             await self._save_astrbot_configs(post_configs)
             return Response().ok(None, "保存成功~ 机器人正在重载配置。").__dict__
         except Exception as e:
-            logger.error(e)
+            logger.error(traceback.format_exc())
             return Response().error(str(e)).__dict__
 
     async def post_plugin_configs(self):
@@ -199,7 +237,8 @@ class ConfigRoute(Route):
             return Response().error("未找到对应平台").__dict__
 
         try:
-            await self._save_astrbot_configs(self.config)
+            save_config(self.config, self.config, is_core=True)
+            await self.core_lifecycle.platform_manager.reload(new_config)
         except Exception as e:
             return Response().error(str(e)).__dict__
         return Response().ok(None, "更新平台配置成功~").__dict__
@@ -235,7 +274,8 @@ class ConfigRoute(Route):
         else:
             return Response().error("未找到对应平台").__dict__
         try:
-            await self._save_astrbot_configs(self.config)
+            save_config(self.config, self.config, is_core=True)
+            await self.core_lifecycle.platform_manager.terminate_platform(platform_id)
         except Exception as e:
             return Response().error(str(e)).__dict__
         return Response().ok(None, "删除平台配置成功~").__dict__
@@ -255,6 +295,12 @@ class ConfigRoute(Route):
         except Exception as e:
             return Response().error(str(e)).__dict__
         return Response().ok(None, "删除成功，已经实时生效~").__dict__
+
+    async def get_llm_tools(self):
+        """获取函数调用工具。包含了本地加载的以及 MCP 服务的工具"""
+        tool_mgr = self.core_lifecycle.provider_manager.llm_tools
+        tools = tool_mgr.get_func_desc_openai_style()
+        return Response().ok(tools).__dict__
 
     async def _get_astrbot_config(self):
         config = self.config
@@ -301,7 +347,7 @@ class ConfigRoute(Route):
     async def _save_astrbot_configs(self, post_configs: dict):
         try:
             save_config(post_configs, self.config, is_core=True)
-            self.core_lifecycle.restart()
+            await self.core_lifecycle.restart()
         except Exception as e:
             raise e
 

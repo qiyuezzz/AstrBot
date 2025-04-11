@@ -25,3 +25,8 @@ dashscope
 python-telegram-bot
 wechatpy
 dingtalk-stream
+defusedxml
+mcp
+certifi
+pip
+telegramify-markdown

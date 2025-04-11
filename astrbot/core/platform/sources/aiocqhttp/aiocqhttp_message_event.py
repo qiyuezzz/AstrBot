@@ -1,9 +1,9 @@
 import asyncio
-
+import typing
 from astrbot.api.event import AstrMessageEvent, MessageChain
+from astrbot.api.platform import Group, MessageMember
 from astrbot.api.message_components import Plain, Image, Record, At, Node, Nodes
 from aiocqhttp import CQHttp
-from astrbot.core.utils.io import file_to_base64, download_image_by_url
 
 
 class AiocqhttpMessageEvent(AstrMessageEvent):
@@ -21,20 +21,15 @@ class AiocqhttpMessageEvent(AstrMessageEvent):
             d = segment.toDict()
             if isinstance(segment, Plain):
                 d["type"] = "text"
+                d["data"]["text"] = segment.text.strip()
+                # 如果是空文本或者只带换行符的文本，不发送
+                if not d["data"]["text"]:
+                    continue
             elif isinstance(segment, (Image, Record)):
                 # convert to base64
-                if segment.file and segment.file.startswith("file:///"):
-                    bs64_data = file_to_base64(segment.file[8:])
-                    image_file_path = segment.file[8:]
-                elif segment.file and segment.file.startswith("http"):
-                    image_file_path = await download_image_by_url(segment.file)
-                    bs64_data = file_to_base64(image_file_path)
-                elif segment.file and segment.file.startswith("base64://"):
-                    bs64_data = segment.file
-                else:
-                    bs64_data = file_to_base64(segment.file)
+                bs64 = await segment.convert_to_base64()
                 d["data"] = {
-                    "file": bs64_data,
+                    "file": bs64,
                 }
             elif isinstance(segment, At):
                 d["data"] = {
@@ -46,6 +41,9 @@ class AiocqhttpMessageEvent(AstrMessageEvent):
     async def send(self, message: MessageChain):
         ret = await AiocqhttpMessageEvent._parse_onebot_json(message)
 
+        if not ret:
+            return
+
         send_one_by_one = False
         for seg in message.chain:
             if isinstance(seg, (Node, Nodes)):
@@ -55,8 +53,13 @@ class AiocqhttpMessageEvent(AstrMessageEvent):
 
         if send_one_by_one:
             for seg in message.chain:
-                if isinstance(seg, Nodes):
-                    # 带有多个节点的合并转发消息
+                if isinstance(seg, (Node, Nodes)):
+                    # 合并转发消息
+
+                    if isinstance(seg, Node):
+                        nodes = Nodes([seg])
+                        seg = nodes
+
                     payload = seg.toDict()
                     if self.get_group_id():
                         payload["group_id"] = self.get_group_id()
@@ -78,3 +81,59 @@ class AiocqhttpMessageEvent(AstrMessageEvent):
             await self.bot.send(self.message_obj.raw_message, ret)
 
         await super().send(message)
+
+    async def send_streaming(self, generator):
+        buffer = None
+        async for chain in generator:
+            if not buffer:
+                buffer = chain
+            else:
+                buffer.chain.extend(chain.chain)
+        if not buffer:
+            return
+        buffer.squash_plain()
+        await self.send(buffer)
+        return await super().send_streaming(generator)
+
+    async def get_group(self, group_id=None, **kwargs):
+        if isinstance(group_id, str) and group_id.isdigit():
+            group_id = int(group_id)
+        elif self.get_group_id():
+            group_id = int(self.get_group_id())
+        else:
+            return None
+
+        info: dict = await self.bot.call_action(
+            "get_group_info",
+            group_id=group_id,
+        )
+
+        members: typing.List[typing.Dict] = await self.bot.call_action(
+            "get_group_member_list",
+            group_id=group_id,
+        )
+
+        owner_id = None
+        admin_ids = []
+        for member in members:
+            if member["role"] == "owner":
+                owner_id = member["user_id"]
+            if member["role"] == "admin":
+                admin_ids.append(member["user_id"])
+
+        group = Group(
+            group_id=str(group_id),
+            group_name=info.get("group_name"),
+            group_avatar="",
+            group_admins=admin_ids,
+            group_owner=str(owner_id),
+            members=[
+                MessageMember(
+                    user_id=member["user_id"],
+                    nickname=member.get("nickname") or member.get("card"),
+                )
+                for member in members
+            ],
+        )
+
+        return group

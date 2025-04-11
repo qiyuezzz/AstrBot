@@ -17,6 +17,7 @@ from astrbot.api.platform import (
     MessageType,
     PlatformMetadata,
 )
+from astrbot import logger
 from astrbot.api.event import MessageChain
 from typing import Union, List
 from astrbot.api.message_components import Image, Plain, At
@@ -125,8 +126,9 @@ class QQOfficialPlatformAdapter(Platform):
 
     def meta(self) -> PlatformMetadata:
         return PlatformMetadata(
-            "qq_official",
-            "QQ 机器人官方 API 适配器",
+            name="qq_official",
+            description="QQ 机器人官方 API 适配器",
+            id=self.config.get("id"),
         )
 
     @staticmethod
@@ -204,3 +206,7 @@ class QQOfficialPlatformAdapter(Platform):
 
     def get_client(self) -> botClient:
         return self.client
+
+    async def terminate(self):
+        await self.client.close()
+        logger.info("QQ 官方机器人接口 适配器已被优雅地关闭")

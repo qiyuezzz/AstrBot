@@ -15,7 +15,8 @@ class SharedPreferences:
 
     def _save_preferences(self):
         with open(self.path, "w") as f:
-            json.dump(self._data, f, indent=4)
+            json.dump(self._data, f, indent=4, ensure_ascii=False)
+            f.flush()
 
     def get(self, key, default=None):
         return self._data.get(key, default)

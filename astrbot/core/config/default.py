@@ -2,7 +2,7 @@
 如需修改配置，请在 `data/cmd_config.json` 中修改或者在管理面板中可视化修改。
 """
 
-VERSION = "3.4.37"
+VERSION = "3.5.2"
 DB_PATH = "data/data_v3.db"
 
 # 默认配置
@@ -49,6 +49,9 @@ DEFAULT_CONFIG = {
         "datetime_system_prompt": True,
         "default_personality": "default",
         "prompt_prefix": "",
+        "max_context_length": -1,
+        "dequeue_context_length": 1,
+        "streaming_response": False,
     },
     "provider_stt_settings": {
         "enable": False,
@@ -80,21 +83,24 @@ DEFAULT_CONFIG = {
     "admins_id": ["astrbot"],
     "t2i": False,
     "t2i_word_threshold": 150,
+    "t2i_strategy": "remote",
+    "t2i_endpoint": "",
     "http_proxy": "",
     "dashboard": {
         "enable": True,
         "username": "astrbot",
         "password": "77b90590a8945a7d36c963981a307dc9",
+        "host": "0.0.0.0",
         "port": 6185,
     },
     "platform": [],
     "wake_prefix": ["/"],
     "log_level": "INFO",
-    "t2i_endpoint": "",
     "pip_install_arg": "",
     "plugin_repo_mirror": "",
     "knowledge_db": {},
     "persona": [],
+    "timezone": "",
 }
 
 
@@ -122,6 +128,7 @@ CONFIG_METADATA_2 = {
                         "enable": False,
                         "appid": "",
                         "secret": "",
+                        "callback_server_host": "0.0.0.0",
                         "port": 6196,
                     },
                     "aiocqhttp(OneBotv11)": {
@@ -146,10 +153,11 @@ CONFIG_METADATA_2 = {
                         "enable": False,
                         "corpid": "",
                         "secret": "",
-                        "port": 6195,
                         "token": "",
                         "encoding_aes_key": "",
                         "api_base_url": "https://qyapi.weixin.qq.com/cgi-bin/",
+                        "callback_server_host": "0.0.0.0",
+                        "port": 6195,
                     },
                     "lark(飞书)": {
                         "id": "lark",
@@ -220,7 +228,7 @@ CONFIG_METADATA_2 = {
                         "hint": "启用后，机器人可以接收到频道的私聊消息。",
                     },
                     "ws_reverse_host": {
-                        "description": "反向 Websocket 主机地址",
+                        "description": "反向 Websocket 主机地址(AstrBot 为服务器端)",
                         "type": "string",
                         "hint": "aiocqhttp 适配器的反向 Websocket 服务器 IP 地址，不包含端口号。",
                     },
@@ -241,6 +249,9 @@ CONFIG_METADATA_2 = {
                 "description": "平台设置",
                 "type": "object",
                 "items": {
+                    "plugin_enable": {
+                        "invisible": True,  # 隐藏插件启用配置
+                    },
                     "unique_session": {
                         "description": "会话隔离",
                         "type": "bool",
@@ -342,7 +353,7 @@ CONFIG_METADATA_2 = {
                         "type": "list",
                         "items": {"type": "string"},
                         "obvious_hint": True,
-                        "hint": "只处理所填写的 ID 发来的消息事件。为空时不启用白名单过滤。可以使用 /sid 指令获取在某个平台上的会话 ID。会话 ID 类似 aiocqhttp:GroupMessage:547540978。管理员可使用 /wl 添加白名单",
+                        "hint": "只处理填写的 ID 发来的消息事件，为空时不启用。可使用 /sid 指令获取在平台上的会话 ID(类似 abc:GroupMessage:123)。管理员可使用 /wl 添加白名单",
                     },
                     "id_whitelist_log": {
                         "description": "打印白名单日志",
@@ -514,7 +525,14 @@ CONFIG_METADATA_2 = {
                         "api_base": "https://generativelanguage.googleapis.com/",
                         "timeout": 120,
                         "model_config": {
-                            "model": "gemini-1.5-flash",
+                            "model": "gemini-2.0-flash-exp",
+                        },
+                        "gm_resp_image_modal": False,
+                        "gm_safety_settings": {
+                            "harassment": "BLOCK_MEDIUM_AND_ABOVE",
+                            "hate_speech": "BLOCK_MEDIUM_AND_ABOVE",
+                            "sexually_explicit": "BLOCK_MEDIUM_AND_ABOVE",
+                            "dangerous_content": "BLOCK_MEDIUM_AND_ABOVE",
                         },
                     },
                     "DeepSeek": {
@@ -578,7 +596,7 @@ CONFIG_METADATA_2 = {
                         "dify_api_type": "chat",
                         "dify_api_key": "",
                         "dify_api_base": "https://api.dify.ai/v1",
-                        "dify_workflow_output_key": "",
+                        "dify_workflow_output_key": "astrbot_wf_output",
                         "dify_query_input_key": "astrbot_text_query",
                         "variables": {},
                         "timeout": 60,
@@ -590,6 +608,11 @@ CONFIG_METADATA_2 = {
                         "dashscope_app_type": "agent",
                         "dashscope_api_key": "",
                         "dashscope_app_id": "",
+                        "rag_options": {
+                            "pipeline_ids": [],
+                            "file_ids": [],
+                            "output_reference": False,
+                        },
                         "variables": {},
                         "timeout": 60,
                     },
@@ -660,8 +683,102 @@ CONFIG_METADATA_2 = {
                         "fishaudio-tts-character": "可莉",
                         "timeout": "20",
                     },
+                    "阿里云百炼_TTS(API)": {
+                        "id": "dashscope_tts",
+                        "type": "dashscope_tts",
+                        "enable": False,
+                        "api_key": "",
+                        "model": "cosyvoice-v1",
+                        "dashscope_tts_voice": "loongstella",
+                        "timeout": "20",
+                    },
                 },
                 "items": {
+                    "dashscope_tts_voice": {
+                        "description": "语音合成模型",
+                        "type": "string",
+                        "hint": "阿里云百炼语音合成模型名称。具体可参考 https://help.aliyun.com/zh/model-studio/developer-reference/cosyvoice-python-api 等内容",
+                    },
+                    "gm_resp_image_modal": {
+                        "description": "启用图片模态",
+                        "type": "bool",
+                        "hint": "启用后，将支持返回图片内容。需要模型支持，否则会报错。具体支持模型请查看 Google Gemini 官方网站。温馨提示，如果您需要生成图片，请关闭 `启用群员识别` 配置获得更好的效果。",
+                    },
+                    "gm_safety_settings": {
+                        "description": "安全过滤器",
+                        "type": "object",
+                        "hint": "设置模型输入的内容安全过滤级别。过滤级别分类为NONE(不屏蔽)、HIGH(高风险时屏蔽)、MEDIUM_AND_ABOVE(中等风险及以上屏蔽)、LOW_AND_ABOVE(低风险及以上时屏蔽)，具体参见Gemini API文档。",
+                        "items": {
+                            "harassment": {
+                                "description": "骚扰内容",
+                                "type": "string",
+                                "hint": "负面或有害评论",
+                                "options": [
+                                    "BLOCK_NONE",
+                                    "BLOCK_ONLY_HIGH",
+                                    "BLOCK_MEDIUM_AND_ABOVE",
+                                    "BLOCK_LOW_AND_ABOVE",
+                                ],
+                            },
+                            "hate_speech": {
+                                "description": "仇恨言论",
+                                "type": "string",
+                                "hint": "粗鲁、无礼或亵渎性质内容",
+                                "options": [
+                                    "BLOCK_NONE",
+                                    "BLOCK_ONLY_HIGH",
+                                    "BLOCK_MEDIUM_AND_ABOVE",
+                                    "BLOCK_LOW_AND_ABOVE",
+                                ],
+                            },
+                            "sexually_explicit": {
+                                "description": "露骨色情内容",
+                                "type": "string",
+                                "hint": "包含性行为或其他淫秽内容的引用",
+                                "options": [
+                                    "BLOCK_NONE",
+                                    "BLOCK_ONLY_HIGH",
+                                    "BLOCK_MEDIUM_AND_ABOVE",
+                                    "BLOCK_LOW_AND_ABOVE",
+                                ],
+                            },
+                            "dangerous_content": {
+                                "description": "危险内容",
+                                "type": "string",
+                                "hint": "宣扬、助长或鼓励有害行为的信息",
+                                "options": [
+                                    "BLOCK_NONE",
+                                    "BLOCK_ONLY_HIGH",
+                                    "BLOCK_MEDIUM_AND_ABOVE",
+                                    "BLOCK_LOW_AND_ABOVE",
+                                ],
+                            },
+                        },
+                    },
+                    "rag_options": {
+                        "description": "RAG 选项",
+                        "type": "object",
+                        "hint": "检索知识库设置, 非必填。仅 Agent 应用类型支持(智能体应用, 包括 RAG 应用)。阿里云百炼应用开启此功能后将无法多轮对话。",
+                        "items": {
+                            "pipeline_ids": {
+                                "description": "知识库 ID 列表",
+                                "type": "list",
+                                "items": {"type": "string"},
+                                "hint": "对指定知识库内所有文档进行检索, 前往 https://bailian.console.aliyun.com/ 数据应用->知识索引创建和获取 ID。",
+                            },
+                            "file_ids": {
+                                "description": "非结构化文档 ID, 传入该参数将对指定非结构化文档进行检索。",
+                                "type": "list",
+                                "items": {"type": "string"},
+                                "hint": "对指定非结构化文档进行检索。前往 https://bailian.console.aliyun.com/ 数据管理创建和获取 ID。",
+                            },
+                            "output_reference": {
+                                "description": "是否输出知识库/文档的引用",
+                                "type": "bool",
+                                "hint": "在每次回答尾部加上引用源。默认为 False。",
+                            },
+                        },
+                    },
                     "sensevoice_hint": {
                         "description": "部署SenseVoice",
                         "type": "string",
@@ -678,12 +795,14 @@ CONFIG_METADATA_2 = {
                         "type": "string",
                         "hint": "modelscope 上的模型名称。默认：iic/SenseVoiceSmall。",
                     },
-                    # "variables": {
-                    #     "description": "工作流固定输入变量",
-                    #     "type": "object",
-                    #     "obvious_hint": True,
-                    #     "hint": "可选。工作流固定输入变量，将会作为工作流的输入。也可以在对话时使用 /set 指令动态设置变量。如果变量名冲突，优先使用动态设置的变量。",
-                    # },
+                    "variables": {
+                        "description": "工作流固定输入变量",
+                        "type": "object",
+                        "obvious_hint": True,
+                        "items": {},
+                        "hint": "可选。工作流固定输入变量，将会作为工作流的输入。也可以在对话时使用 /set 指令动态设置变量。如果变量名冲突，优先使用动态设置的变量。",
+                        "invisible": True,
+                    },
                     # "fastgpt_app_type": {
                     #     "description": "应用类型",
                     #     "type": "string",
@@ -694,7 +813,7 @@ CONFIG_METADATA_2 = {
                     "dashscope_app_type": {
                         "description": "应用类型",
                         "type": "string",
-                        "hint": "阿里云百炼应用的应用类型。",
+                        "hint": "百炼应用的应用类型。",
                         "options": [
                             "agent",
                             "agent-arrange",
@@ -874,6 +993,21 @@ CONFIG_METADATA_2 = {
                         "type": "string",
                         "hint": "添加之后，会在每次对话的 Prompt 前加上此文本。",
                     },
+                    "max_context_length": {
+                        "description": "最多携带对话数量(条)",
+                        "type": "int",
+                        "hint": "超出这个数量时将丢弃最旧的部分，用户和AI的一轮聊天记为 1 条。-1 表示不限制，默认为不限制。",
+                    },
+                    "dequeue_context_length": {
+                        "description": "丢弃对话数量(条)",
+                        "type": "int",
+                        "hint": "超出 最多携带对话数量(条) 时，丢弃多少条记录，用户和AI的一轮聊天记为 1 条。适宜的配置，可以提高超长上下文对话 deepseek 命中缓存效果，理想情况下计费将降低到1/3以下",
+                    },
+                    "streaming_response": {
+                        "description": "启用流式回复",
+                        "type": "bool",
+                        "hint": "启用后，将会流式输出 LLM 的响应。目前仅支持 OpenAI API提供商 以及 Telegram、QQ Official 私聊 两个平台",
+                    },
                 },
             },
             "persona": {
@@ -967,10 +1101,10 @@ CONFIG_METADATA_2 = {
                         "hint": "群聊消息最大数量。超过此数量后，会自动清除旧消息。",
                     },
                     "image_caption": {
-                        "description": "启用图像转述(需要模型支持)",
+                        "description": "群聊图像转述(需模型支持)",
                         "type": "bool",
                         "obvious_hint": True,
-                        "hint": "启用后，当接收到图片消息时，会使用模型先将图片转述为文字再进行后续处理。推荐使用 gpt-4o-mini 模型。",
+                        "hint": "用模型将群聊中的图片消息转述为文字，推荐 gpt-4o-mini 模型。和机器人的唤醒聊天中的图片消息仍然会直接作为上下文输入。",
                     },
                     "image_caption_provider_id": {
                         "description": "图像转述提供商 ID",
@@ -1054,16 +1188,28 @@ CONFIG_METADATA_2 = {
                 "type": "string",
                 "hint": "启用后，会以添加环境变量的方式设置代理。格式为 `http://ip:port`",
             },
+            "timezone": {
+                "description": "时区",
+                "type": "string",
+                "obvious_hint": True,
+                "hint": "时区设置。请填写 IANA 时区名称, 如 Asia/Shanghai, 为空时使用系统默认时区。所有时区请查看: https://data.iana.org/time-zones/tzdb-2021a/zone1970.tab",
+            },
             "log_level": {
                 "description": "控制台日志级别",
                 "type": "string",
                 "hint": "控制台输出日志的级别。",
                 "options": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
             },
+            "t2i_strategy": {
+                "description": "文本转图像渲染源",
+                "type": "string",
+                "hint": "文本转图像策略。`remote` 为使用远程基于 HTML 的渲染服务，`local` 为使用 PIL 本地渲染。当使用 local 时，将 ttf 字体命名为 'font.ttf' 放在 data/ 目录下可自定义字体。",
+                "options": ["remote", "local"],
+            },
             "t2i_endpoint": {
                 "description": "文本转图像服务接口",
                 "type": "string",
-                "hint": "为空时使用 AstrBot API 服务",
+                "hint": "当 t2i_strategy 为 remote 时生效。为空时使用 AstrBot API 服务",
             },
             "pip_install_arg": {
                 "description": "pip 安装参数",

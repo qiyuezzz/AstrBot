@@ -1,7 +1,8 @@
 import traceback
+import asyncio
 from astrbot.core.config.astrbot_config import AstrBotConfig
 from .provider import Provider, STTProvider, TTSProvider, Personality
-from .entites import ProviderType
+from .entities import ProviderType
 from typing import List
 from astrbot.core.db import BaseDatabase
 from .register import provider_cls_map, llm_tools
@@ -127,6 +128,12 @@ class ProviderManager:
         if self.tts_enabled and not self.curr_tts_provider_inst:
             logger.warning("未启用任何用于 文本转语音 的提供商适配器。")
 
+        # 初始化 MCP Client 连接
+        asyncio.create_task(
+            self.llm_tools.mcp_service_selector(), name="mcp-service-handler"
+        )
+        self.llm_tools.mcp_service_queue.put_nowait({"type": "init"})
+
     async def load_provider(self, provider_config: dict):
         if not provider_config["enable"]:
             return
@@ -190,6 +197,10 @@ class ProviderManager:
                 case "fishaudio_tts_api":
                     from .sources.fishaudio_tts_api_source import (
                         ProviderFishAudioTTSAPI as ProviderFishAudioTTSAPI,
+                    )
+                case "dashscope_tts":
+                    from .sources.dashscope_tts import (
+                        ProviderDashscopeTTSAPI as ProviderDashscopeTTSAPI,
                     )
         except (ImportError, ModuleNotFoundError) as e:
             logger.critical(
@@ -299,10 +310,42 @@ class ProviderManager:
 
         if len(self.provider_insts) == 0:
             self.curr_provider_inst = None
+        elif (
+            self.curr_provider_inst is None
+            and len(self.provider_insts) > 0
+            and self.provider_enabled
+        ):
+            self.curr_provider_inst = self.provider_insts[0]
+            self.selected_provider_id = self.curr_provider_inst.meta().id
+            logger.info(
+                f"自动选择 {self.curr_provider_inst.meta().id} 作为当前提供商适配器。"
+            )
+
         if len(self.stt_provider_insts) == 0:
             self.curr_stt_provider_inst = None
+        elif (
+            self.curr_stt_provider_inst is None
+            and len(self.stt_provider_insts) > 0
+            and self.stt_enabled
+        ):
+            self.curr_stt_provider_inst = self.stt_provider_insts[0]
+            self.selected_stt_provider_id = self.curr_stt_provider_inst.meta().id
+            logger.info(
+                f"自动选择 {self.curr_stt_provider_inst.meta().id} 作为当前语音转文本提供商适配器。"
+            )
+
         if len(self.tts_provider_insts) == 0:
             self.curr_tts_provider_inst = None
+        elif (
+            self.curr_tts_provider_inst is None
+            and len(self.tts_provider_insts) > 0
+            and self.tts_enabled
+        ):
+            self.curr_tts_provider_inst = self.tts_provider_insts[0]
+            self.selected_tts_provider_id = self.curr_tts_provider_inst.meta().id
+            logger.info(
+                f"自动选择 {self.curr_tts_provider_inst.meta().id} 作为当前文本转语音提供商适配器。"
+            )
 
     def get_insts(self):
         return self.provider_insts
@@ -339,3 +382,5 @@ class ProviderManager:
         for provider_inst in self.provider_insts:
             if hasattr(provider_inst, "terminate"):
                 await provider_inst.terminate()
+        # 清理 MCP Client 连接
+        await self.llm_tools.mcp_service_queue.put({"type": "terminate"})

@@ -34,6 +34,7 @@ class WecomServer:
     def __init__(self, event_queue: asyncio.Queue, config: dict):
         self.server = quart.Quart(__name__)
         self.port = int(config.get("port"))
+        self.callback_server_host = config.get("callback_server_host", "0.0.0.0")
         self.server.add_url_rule(
             "/callback/command", view_func=self.verify, methods=["GET"]
         )
@@ -49,6 +50,7 @@ class WecomServer:
         )
 
         self.callback = None
+        self.shutdown_event = asyncio.Event()
 
     async def verify(self):
         logger.info(f"验证请求有效性: {quart.request.args}")
@@ -86,17 +88,17 @@ class WecomServer:
         return "success"
 
     async def start_polling(self):
-        logger.info(f"将在 0.0.0.0:{self.port} 端口启动 企业微信 适配器。")
+        logger.info(
+            f"将在 {self.callback_server_host}:{self.port} 端口启动 企业微信 适配器。"
+        )
         await self.server.run_task(
-            host="0.0.0.0",
+            host=self.callback_server_host,
             port=self.port,
-            shutdown_trigger=self.shutdown_trigger_placeholder,
+            shutdown_trigger=self.shutdown_trigger,
         )
 
-    async def shutdown_trigger_placeholder(self):
-        while not self.event_queue.closed:  # noqa: ASYNC110
-            await asyncio.sleep(1)
-        logger.info("企业微信 适配器已关闭。")
+    async def shutdown_trigger(self):
+        await self.shutdown_event.wait()
 
 
 @register_platform_adapter("wecom", "wecom 适配器")
@@ -232,3 +234,8 @@ class WecomPlatformAdapter(Platform):
 
     def get_client(self) -> WeChatClient:
         return self.client
+
+    async def terminate(self):
+        self.server.shutdown_event.set()
+        await self.server.server.shutdown()
+        logger.info("企业微信 适配器已被优雅地关闭")

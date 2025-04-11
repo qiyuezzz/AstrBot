@@ -5,6 +5,7 @@ from typing import Union, AsyncGenerator
 from ..stage import Stage, register_stage, registered_stages
 from ..context import PipelineContext
 from astrbot.core.platform.astr_message_event import AstrMessageEvent
+from astrbot.core.message.message_event_result import ResultContentType
 from astrbot.core.platform.message_type import MessageType
 from astrbot.core import logger
 from astrbot.core.message.components import Plain, Image, At, Reply, Record, File, Node
@@ -31,6 +32,8 @@ class ResultDecorateStage(Stage):
                 self.t2i_word_threshold = 50
         except BaseException:
             self.t2i_word_threshold = 150
+        self.t2i_strategy = ctx.astrbot_config["t2i_strategy"]
+        self.t2i_use_network = self.t2i_strategy == "remote"
 
         self.forward_threshold = ctx.astrbot_config["platform_settings"][
             "forward_threshold"
@@ -70,11 +73,17 @@ class ResultDecorateStage(Stage):
         if result is None or not result.chain:
             return
 
+        if result.result_content_type == ResultContentType.STREAMING_RESULT:
+            return
+
+        is_stream = result.result_content_type == ResultContentType.STREAMING_FINISH
+
         # 回复时检查内容安全
         if (
             self.content_safe_check_reply
             and self.content_safe_check_stage
             and result.is_llm_result()
+            and not is_stream  # 流式输出不检查内容安全
         ):
             text = ""
             for comp in result.chain:
@@ -87,13 +96,17 @@ class ResultDecorateStage(Stage):
 
         # 发送消息前事件钩子
         handlers = star_handlers_registry.get_handlers_by_event_type(
-            EventType.OnDecoratingResultEvent
+            EventType.OnDecoratingResultEvent, platform_id=event.get_platform_id()
         )
         for handler in handlers:
             try:
                 logger.debug(
                     f"hook(on_decorating_result) -> {star_map[handler.handler_module_path].name} - {handler.handler_name}"
                 )
+                if is_stream:
+                    logger.warning(
+                        "启用流式输出时，依赖发送消息前事件钩子的插件可能无法正常工作"
+                    )
                 await handler.handler(event)
                 if event.get_result() is None or not event.get_result().chain:
                     logger.debug(
@@ -107,6 +120,11 @@ class ResultDecorateStage(Stage):
                     f"{star_map[handler.handler_module_path].name} - {handler.handler_name} 终止了事件传播。"
                 )
                 return
+
+        # 流式输出不执行下面的逻辑
+        if is_stream:
+            logger.info("流式输出已启用，跳过结果装饰阶段")
+            return
 
         # 需要再获取一次。插件可能直接对 chain 进行了替换。
         result = event.get_result()
@@ -192,7 +210,9 @@ class ResultDecorateStage(Stage):
                 if plain_str and len(plain_str) > self.t2i_word_threshold:
                     render_start = time.time()
                     try:
-                        url = await html_renderer.render_t2i(plain_str, return_url=True)
+                        url = await html_renderer.render_t2i(
+                            plain_str, return_url=True, use_network=self.t2i_use_network
+                        )
                     except BaseException:
                         logger.error("文本转图片失败，使用文本发送。")
                         return
@@ -201,7 +221,10 @@ class ResultDecorateStage(Stage):
                             "文本转图片耗时超过了 3 秒，如果觉得很慢可以使用 /t2i 关闭文本转图片模式。"
                         )
                     if url:
-                        result.chain = [Image.fromURL(url)]
+                        if url.startswith("http"):
+                            result.chain = [Image.fromURL(url)]
+                        else:
+                            result.chain = [Image.fromFileSystem(url)]
 
             # 触发转发消息
             has_forwarded = False
