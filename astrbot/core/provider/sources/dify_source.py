@@ -1,32 +1,28 @@
 import astrbot.core.message.components as Comp
-
+import os
 from typing import List
-from .. import Provider, Personality
+from .. import Provider
 from ..entities import LLMResponse
 from ..func_tool_manager import FuncCall
-from astrbot.core.db import BaseDatabase
 from ..register import register_provider_adapter
 from astrbot.core.utils.dify_api_client import DifyAPIClient
 from astrbot.core.utils.io import download_image_by_url, download_file
 from astrbot.core import logger, sp
 from astrbot.core.message.message_event_result import MessageChain
+from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
 
 @register_provider_adapter("dify", "Dify APP 适配器。")
 class ProviderDify(Provider):
     def __init__(
         self,
-        provider_config: dict,
-        provider_settings: dict,
-        db_helper: BaseDatabase,
-        persistant_history=False,
-        default_persona: Personality = None,
+        provider_config,
+        provider_settings,
+        default_persona=None,
     ) -> None:
         super().__init__(
             provider_config,
             provider_settings,
-            persistant_history,
-            db_helper,
             default_persona,
         )
         self.api_key = provider_config.get("dify_api_key", "")
@@ -60,13 +56,18 @@ class ProviderDify(Provider):
         self,
         prompt: str,
         session_id: str = None,
-        image_urls: List[str] = [],
+        image_urls: List[str] = None,
         func_tool: FuncCall = None,
         contexts: List = None,
         system_prompt: str = None,
+        tool_calls_result=None,
+        model=None,
         **kwargs,
     ) -> LLMResponse:
+        if image_urls is None:
+            image_urls = []
         result = ""
+        session_id = session_id or kwargs.get("user") or "unknown"  # 1734
         conversation_id = self.conversation_ids.get(session_id, "")
 
         files_payload = []
@@ -96,13 +97,13 @@ class ProviderDify(Provider):
         # 获得会话变量
         payload_vars = self.variables.copy()
         # 动态变量
-        session_vars = sp.get("session_variables", {})
-        session_var = session_vars.get(session_id, {})
+        session_var = await sp.session_get(session_id, "session_variables", default={})
         payload_vars.update(session_var)
+        payload_vars["system_prompt"] = system_prompt
 
         try:
             match self.api_type:
-                case "chat" | "agent":
+                case "chat" | "agent" | "chatflow":
                     if not prompt:
                         prompt = "请描述这张图片。"
 
@@ -198,6 +199,7 @@ class ProviderDify(Provider):
         contexts=...,
         system_prompt=None,
         tool_calls_result=None,
+        model=None,
         **kwargs,
     ):
         # raise NotImplementedError("This method is not implemented yet.")
@@ -227,7 +229,8 @@ class ProviderDify(Provider):
                     return Comp.Image(file=item["url"], url=item["url"])
                 case "audio":
                     # 仅支持 wav
-                    path = f"data/temp/{item['filename']}.wav"
+                    temp_dir = os.path.join(get_astrbot_data_path(), "temp")
+                    path = os.path.join(temp_dir, f"{item['filename']}.wav")
                     await download_file(item["url"], path)
                     return Comp.Image(file=item["url"], url=item["url"])
                 case "video":

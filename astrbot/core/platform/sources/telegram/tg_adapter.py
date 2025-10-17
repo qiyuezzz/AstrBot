@@ -1,4 +1,5 @@
 import asyncio
+import re
 import sys
 import uuid
 
@@ -57,6 +58,14 @@ class TelegramPlatformAdapter(Platform):
 
         self.base_url = base_url
 
+        self.enable_command_register = self.config.get(
+            "telegram_command_register", True
+        )
+        self.enable_command_refresh = self.config.get(
+            "telegram_command_auto_refresh", True
+        )
+        self.last_command_hash = None
+
         self.application = (
             ApplicationBuilder()
             .token(self.config["telegram_token"])
@@ -86,25 +95,30 @@ class TelegramPlatformAdapter(Platform):
 
     @override
     def meta(self) -> PlatformMetadata:
-        return PlatformMetadata(
-            name="telegram", description="telegram 适配器", id=self.config.get("id")
-        )
+        id_ = self.config.get("id") or "telegram"
+        return PlatformMetadata(name="telegram", description="telegram 适配器", id=id_)
 
     @override
     async def run(self):
         await self.application.initialize()
         await self.application.start()
-        await self.register_commands()
 
-        # TODO 使用更优雅的方式重新注册命令
-        self.scheduler.add_job(
-            self.register_commands,
-            "interval",
-            minutes=5,
-            id="telegram_command_register",
-            misfire_grace_time=60,
-        )
-        self.scheduler.start()
+        if self.enable_command_register:
+            await self.register_commands()
+
+        if self.enable_command_refresh and self.enable_command_register:
+            self.scheduler.add_job(
+                self.register_commands,
+                "interval",
+                seconds=self.config.get("telegram_command_register_interval", 300),
+                id="telegram_command_register",
+                misfire_grace_time=60,
+            )
+            self.scheduler.start()
+
+        if not self.application.updater:
+            logger.error("Telegram Updater is not initialized. Cannot start polling.")
+            return
 
         queue = self.application.updater.start_polling()
         logger.info("Telegram Platform Adapter is running.")
@@ -113,13 +127,17 @@ class TelegramPlatformAdapter(Platform):
     async def register_commands(self):
         """收集所有注册的指令并注册到 Telegram"""
         try:
-            await self.client.delete_my_commands()
             commands = self.collect_commands()
 
             if commands:
+                current_hash = hash(
+                    tuple((cmd.command, cmd.description) for cmd in commands)
+                )
+                if current_hash == self.last_command_hash:
+                    return
+                self.last_command_hash = current_hash
+                await self.client.delete_my_commands()
                 await self.client.set_my_commands(commands)
-                for cmd in commands:
-                    logger.debug(f"已注册指令: /{cmd.command} - {cmd.description}")
 
         except Exception as e:
             logger.error(f"向 Telegram 注册指令时发生错误: {e!s}")
@@ -129,8 +147,8 @@ class TelegramPlatformAdapter(Platform):
         command_dict = {}
         skip_commands = {"start"}
 
-        for handler_md in star_handlers_registry._handlers:
-            handler_metadata = handler_md[1]
+        for handler_md in star_handlers_registry:
+            handler_metadata = handler_md
             if not star_map[handler_metadata.handler_module_path].activated:
                 continue
             for event_filter in handler_metadata.event_filters:
@@ -167,6 +185,9 @@ class TelegramPlatformAdapter(Platform):
         if not cmd_name or cmd_name in skip_commands:
             return None
 
+        if not re.match(r"^[a-z0-9_]+$", cmd_name) or len(cmd_name) > 32:
+            return None
+
         # Build description.
         description = handler_metadata.desc or (
             f"指令组: {cmd_name} (包含多个子指令)" if is_group else f"指令: {cmd_name}"
@@ -176,6 +197,11 @@ class TelegramPlatformAdapter(Platform):
         return cmd_name, description
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not update.effective_chat:
+            logger.warning(
+                "Received a start command without an effective chat, skipping /start reply."
+            )
+            return
         await context.bot.send_message(
             chat_id=update.effective_chat.id, text=self.config["start_message"]
         )
@@ -188,15 +214,20 @@ class TelegramPlatformAdapter(Platform):
 
     async def convert_message(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE, get_reply=True
-    ) -> AstrBotMessage:
+    ) -> AstrBotMessage | None:
         """转换 Telegram 的消息对象为 AstrBotMessage 对象。
 
         @param update: Telegram 的 Update 对象。
         @param context: Telegram 的 Context 对象。
         @param get_reply: 是否获取回复消息。这个参数是为了防止多个回复嵌套。
         """
+        if not update.message:
+            logger.warning("Received an update without a message.")
+            return None
+
         message = AstrBotMessage()
         message.session_id = str(update.message.chat.id)
+
         # 获得是群聊还是私聊
         if update.message.chat.type == ChatType.PRIVATE:
             message.type = MessageType.FRIEND_MESSAGE
@@ -207,10 +238,13 @@ class TelegramPlatformAdapter(Platform):
                 # Topic Group
                 message.group_id += "#" + str(update.message.message_thread_id)
                 message.session_id = message.group_id
-
         message.message_id = str(update.message.message_id)
+        _from_user = update.message.from_user
+        if not _from_user:
+            logger.warning("[Telegram] Received a message without a from_user.")
+            return None
         message.sender = MessageMember(
-            str(update.message.from_user.id), update.message.from_user.username
+            str(_from_user.id), _from_user.username or "Unknown"
         )
         message.self_id = str(context.bot.username)
         message.raw_message = update
@@ -229,22 +263,32 @@ class TelegramPlatformAdapter(Platform):
             )
             reply_abm = await self.convert_message(reply_update, context, False)
 
-            message.message.append(
-                Comp.Reply(
-                    id=reply_abm.message_id,
-                    chain=reply_abm.message,
-                    sender_id=reply_abm.sender.user_id,
-                    sender_nickname=reply_abm.sender.nickname,
-                    time=reply_abm.timestamp,
-                    message_str=reply_abm.message_str,
-                    text=reply_abm.message_str,
-                    qq=reply_abm.sender.user_id,
+            if reply_abm:
+                message.message.append(
+                    Comp.Reply(
+                        id=reply_abm.message_id,
+                        chain=reply_abm.message,
+                        sender_id=reply_abm.sender.user_id,
+                        sender_nickname=reply_abm.sender.nickname,
+                        time=reply_abm.timestamp,
+                        message_str=reply_abm.message_str,
+                        text=reply_abm.message_str,
+                        qq=reply_abm.sender.user_id,
+                    )
                 )
-            )
 
         if update.message.text:
             # 处理文本消息
             plain_text = update.message.text
+            if (
+                message.type == MessageType.GROUP_MESSAGE
+                and update.message
+                and update.message.reply_to_message
+                and update.message.reply_to_message.from_user
+                and update.message.reply_to_message.from_user.id == context.bot.id
+            ):
+                plain_text2 = f"/@{context.bot.username} " + plain_text
+                plain_text = plain_text2
 
             # 群聊场景命令特殊处理
             if plain_text.startswith("/"):
@@ -263,10 +307,12 @@ class TelegramPlatformAdapter(Platform):
                             entity.offset + 1 : entity.offset + entity.length
                         ]
                         message.message.append(Comp.At(qq=name, name=name))
-                        plain_text = (
-                            plain_text[: entity.offset]
-                            + plain_text[entity.offset + entity.length :]
-                        )
+                        # 如果mention是当前bot则移除；否则保留
+                        if name.lower() == context.bot.username.lower():
+                            plain_text = (
+                                plain_text[: entity.offset]
+                                + plain_text[entity.offset + entity.length :]
+                            )
 
             if plain_text:
                 message.message.append(Comp.Plain(plain_text))
@@ -308,15 +354,25 @@ class TelegramPlatformAdapter(Platform):
 
         elif update.message.document:
             file = await update.message.document.get_file()
-            message.message = [
-                Comp.File(file=file.file_path, name=update.message.document.file_name),
-            ]
+            file_name = update.message.document.file_name or uuid.uuid4().hex
+            file_path = file.file_path
+            if file_path is None:
+                logger.warning(
+                    f"Telegram document file_path is None, cannot save the file {file_name}."
+                )
+            else:
+                message.message.append(Comp.File(file=file_path, name=file_name))
 
         elif update.message.video:
             file = await update.message.video.get_file()
-            message.message = [
-                Comp.Video(file=file.file_path, path=file.file_path),
-            ]
+            file_name = update.message.video.file_name or uuid.uuid4().hex
+            file_path = file.file_path
+            if file_path is None:
+                logger.warning(
+                    f"Telegram video file_path is None, cannot save the file {file_name}."
+                )
+            else:
+                message.message.append(Comp.Video(file=file_path, path=file.file_path))
 
         return message
 
@@ -339,7 +395,9 @@ class TelegramPlatformAdapter(Platform):
                 self.scheduler.shutdown()
 
             await self.application.stop()
-            await self.client.delete_my_commands()
+
+            if self.enable_command_register:
+                await self.client.delete_my_commands()
 
             # 保险起见先判断是否存在updater对象
             if self.application.updater is not None:

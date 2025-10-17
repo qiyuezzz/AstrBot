@@ -22,20 +22,24 @@ class InitialLoader:
         self.db = db
         self.logger = logger
         self.log_broker = log_broker
+        self.webui_dir: str | None = None
 
     async def start(self):
         core_lifecycle = AstrBotCoreLifecycle(self.log_broker, self.db)
 
-        core_task = []
         try:
             await core_lifecycle.initialize()
-            core_task = core_lifecycle.start()
         except Exception as e:
             logger.critical(traceback.format_exc())
             logger.critical(f"😭 初始化 AstrBot 失败：{e} !!!")
+            return
+
+        core_task = core_lifecycle.start()
+
+        webui_dir = self.webui_dir
 
         self.dashboard_server = AstrBotDashboard(
-            core_lifecycle, self.db, core_lifecycle.dashboard_shutdown_event
+            core_lifecycle, self.db, core_lifecycle.dashboard_shutdown_event, webui_dir
         )
         task = asyncio.gather(
             core_task, self.dashboard_server.run()

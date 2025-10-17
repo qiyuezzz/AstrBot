@@ -8,11 +8,9 @@ from astrbot.api.event import filter
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from astrbot.api.event import AstrMessageEvent, MessageEventResult
 from astrbot.api import llm_tool, logger
+from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
 
-@star.register(
-    name="astrbot-reminder", desc="使用 LLM 待办提醒", author="Soulter", version="0.0.1"
-)
 class Main(star.Star):
     """使用 LLM 待办提醒。只需对 LLM 说想要提醒的事情和时间即可。比如：`之后每天这个时候都提醒我做多邻国`"""
 
@@ -29,10 +27,11 @@ class Main(star.Star):
         self.scheduler = AsyncIOScheduler(timezone=self.timezone)
 
         # set and load config
-        if not os.path.exists("data/astrbot-reminder.json"):
-            with open("data/astrbot-reminder.json", "w", encoding="utf-8") as f:
+        reminder_file = os.path.join(get_astrbot_data_path(), "astrbot-reminder.json")
+        if not os.path.exists(reminder_file):
+            with open(reminder_file, "w", encoding="utf-8") as f:
                 f.write("{}")
-        with open("data/astrbot-reminder.json", "r", encoding="utf-8") as f:
+        with open(reminder_file, "r", encoding="utf-8") as f:
             self.reminder_data = json.load(f)
 
         self._init_scheduler()
@@ -82,7 +81,8 @@ class Main(star.Star):
 
     async def _save_data(self):
         """Save the reminder data."""
-        with open("data/astrbot-reminder.json", "w", encoding="utf-8") as f:
+        reminder_file = os.path.join(get_astrbot_data_path(), "astrbot-reminder.json")
+        with open(reminder_file, "w", encoding="utf-8") as f:
             json.dump(self.reminder_data, f, ensure_ascii=False)
 
     def _parse_cron_expr(self, cron_expr: str):
@@ -109,7 +109,7 @@ class Main(star.Star):
         Args:
             text(string): Must Required. The content of the reminder.
             datetime_str(string): Required when user's reminder is a single reminder. The datetime string of the reminder, Must format with %Y-%m-%d %H:%M
-            cron_expression(string): Required when user's reminder is a repeated reminder. The cron expression of the reminder.
+            cron_expression(string): Required when user's reminder is a repeated reminder. The cron expression of the reminder. Monday is 0 and Sunday is 6.
             human_readable_cron(string): Optional. The human readable cron expression of the reminder.
         """
         if event.get_platform_name() == "qq_official":

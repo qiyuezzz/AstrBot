@@ -5,7 +5,6 @@ from typing import List
 from .. import Provider, Personality
 from ..entities import LLMResponse
 from ..func_tool_manager import FuncCall
-from astrbot.core.db import BaseDatabase
 from ..register import register_provider_adapter
 from astrbot.core.message.message_event_result import MessageChain
 from .openai_source import ProviderOpenAIOfficial
@@ -19,16 +18,12 @@ class ProviderDashscope(ProviderOpenAIOfficial):
         self,
         provider_config: dict,
         provider_settings: dict,
-        db_helper: BaseDatabase,
-        persistant_history=False,
-        default_persona: Personality = None,
+        default_persona: Personality | None = None,
     ) -> None:
         Provider.__init__(
             self,
             provider_config,
             provider_settings,
-            persistant_history,
-            db_helper,
             default_persona,
         )
         self.api_key = provider_config.get("dashscope_api_key", "")
@@ -72,13 +67,15 @@ class ProviderDashscope(ProviderOpenAIOfficial):
         func_tool: FuncCall = None,
         contexts: List = None,
         system_prompt: str = None,
+        model=None,
         **kwargs,
     ) -> LLMResponse:
+        if contexts is None:
+            contexts = []
         # 获得会话变量
         payload_vars = self.variables.copy()
         # 动态变量
-        session_vars = sp.get("session_variables", {})
-        session_var = session_vars.get(session_id, {})
+        session_var = await sp.session_get(session_id, "session_variables", default={})
         payload_vars.update(session_var)
 
         if (
@@ -166,6 +163,7 @@ class ProviderDashscope(ProviderOpenAIOfficial):
         contexts=...,
         system_prompt=None,
         tool_calls_result=None,
+        model=None,
         **kwargs,
     ):
         # raise NotImplementedError("This method is not implemented yet.")

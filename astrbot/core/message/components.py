@@ -22,17 +22,22 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
+import asyncio
 import base64
 import json
 import os
-import uuid
 import typing as T
+import uuid
 from enum import Enum
+
 from pydantic.v1 import BaseModel
-from astrbot.core.utils.io import download_image_by_url, file_to_base64
+
+from astrbot.core import astrbot_config, file_token_service, logger
+from astrbot.core.utils.astrbot_path import get_astrbot_data_path
+from astrbot.core.utils.io import download_file, download_image_by_url, file_to_base64
 
 
-class ComponentType(Enum):
+class ComponentType(str, Enum):
     Plain = "Plain"  # 纯文本消息
     Face = "Face"  # QQ表情
     Record = "Record"  # 语音
@@ -97,9 +102,13 @@ class BaseMessageComponent(BaseModel):
             data[k] = v
         return {"type": self.type.lower(), "data": data}
 
+    async def to_dict(self) -> dict:
+        # 默认情况下，回退到旧的同步 toDict()
+        return self.toDict()
+
 
 class Plain(BaseMessageComponent):
-    type: ComponentType = "Plain"
+    type = ComponentType.Plain
     text: str
     convert: T.Optional[bool] = True  # 若为 False 则直接发送未转换 CQ 码的消息
 
@@ -113,9 +122,15 @@ class Plain(BaseMessageComponent):
             self.text.replace("&", "&amp;").replace("[", "&#91;").replace("]", "&#93;")
         )
 
+    def toDict(self):
+        return {"type": "text", "data": {"text": self.text.strip()}}
+
+    async def to_dict(self):
+        return {"type": "text", "data": {"text": self.text}}
+
 
 class Face(BaseMessageComponent):
-    type: ComponentType = "Face"
+    type = ComponentType.Face
     id: int
 
     def __init__(self, **_):
@@ -123,7 +138,7 @@ class Face(BaseMessageComponent):
 
 
 class Record(BaseMessageComponent):
-    type: ComponentType = "Record"
+    type = ComponentType.Record
     file: T.Optional[str] = ""
     magic: T.Optional[bool] = False
     url: T.Optional[str] = ""
@@ -150,28 +165,33 @@ class Record(BaseMessageComponent):
             return Record(file=url, **_)
         raise Exception("not a valid url")
 
+    @staticmethod
+    def fromBase64(bs64_data: str, **_):
+        return Record(file=f"base64://{bs64_data}", **_)
+
     async def convert_to_file_path(self) -> str:
         """将这个语音统一转换为本地文件路径。这个方法避免了手动判断语音数据类型，直接返回语音数据的本地路径（如果是网络 URL, 则会自动进行下载）。
 
         Returns:
             str: 语音的本地路径，以绝对路径表示。
         """
-        if self.file and self.file.startswith("file:///"):
-            file_path = self.file[8:]
-            return file_path
-        elif self.file and self.file.startswith("http"):
+        if not self.file:
+            raise Exception(f"not a valid file: {self.file}")
+        if self.file.startswith("file:///"):
+            return self.file[8:]
+        elif self.file.startswith("http"):
             file_path = await download_image_by_url(self.file)
             return os.path.abspath(file_path)
-        elif self.file and self.file.startswith("base64://"):
+        elif self.file.startswith("base64://"):
             bs64_data = self.file.removeprefix("base64://")
             image_bytes = base64.b64decode(bs64_data)
-            file_path = f"data/temp/{uuid.uuid4()}.jpg"
+            temp_dir = os.path.join(get_astrbot_data_path(), "temp")
+            file_path = os.path.join(temp_dir, f"{uuid.uuid4()}.jpg")
             with open(file_path, "wb") as f:
                 f.write(image_bytes)
             return os.path.abspath(file_path)
         elif os.path.exists(self.file):
-            file_path = self.file
-            return os.path.abspath(file_path)
+            return os.path.abspath(self.file)
         else:
             raise Exception(f"not a valid file: {self.file}")
 
@@ -182,22 +202,48 @@ class Record(BaseMessageComponent):
             str: 语音的 base64 编码，不以 base64:// 或者 data:image/jpeg;base64, 开头。
         """
         # convert to base64
-        if self.file and self.file.startswith("file:///"):
+        if not self.file:
+            raise Exception(f"not a valid file: {self.file}")
+        if self.file.startswith("file:///"):
             bs64_data = file_to_base64(self.file[8:])
-        elif self.file and self.file.startswith("http"):
+        elif self.file.startswith("http"):
             file_path = await download_image_by_url(self.file)
             bs64_data = file_to_base64(file_path)
-        elif self.file and self.file.startswith("base64://"):
+        elif self.file.startswith("base64://"):
             bs64_data = self.file
         elif os.path.exists(self.file):
             bs64_data = file_to_base64(self.file)
         else:
             raise Exception(f"not a valid file: {self.file}")
+        bs64_data = bs64_data.removeprefix("base64://")
         return bs64_data
+
+    async def register_to_file_service(self) -> str:
+        """
+        将语音注册到文件服务。
+
+        Returns:
+            str: 注册后的URL
+
+        Raises:
+            Exception: 如果未配置 callback_api_base
+        """
+        callback_host = astrbot_config.get("callback_api_base")
+
+        if not callback_host:
+            raise Exception("未配置 callback_api_base，文件服务不可用")
+
+        file_path = await self.convert_to_file_path()
+
+        token = await file_token_service.register_file(file_path)
+
+        logger.debug(f"已注册：{callback_host}/api/file/{token}")
+
+        return f"{callback_host}/api/file/{token}"
 
 
 class Video(BaseMessageComponent):
-    type: ComponentType = "Video"
+    type = ComponentType.Video
     file: str
     cover: T.Optional[str] = ""
     c: T.Optional[int] = 2
@@ -205,9 +251,6 @@ class Video(BaseMessageComponent):
     path: T.Optional[str] = ""
 
     def __init__(self, file: str, **_):
-        # for k in _.keys():
-        #     if k == "c" and _[k] not in [2, 3]:
-        #         logger.warn(f"Protocol: {k}={_[k]} doesn't match values")
         super().__init__(file=file, **_)
 
     @staticmethod
@@ -220,14 +263,84 @@ class Video(BaseMessageComponent):
             return Video(file=url, **_)
         raise Exception("not a valid url")
 
+    async def convert_to_file_path(self) -> str:
+        """将这个视频统一转换为本地文件路径。这个方法避免了手动判断视频数据类型，直接返回视频数据的本地路径（如果是网络 URL，则会自动进行下载）。
+
+        Returns:
+            str: 视频的本地路径，以绝对路径表示。
+        """
+        url = self.file
+        if url and url.startswith("file:///"):
+            return url[8:]
+        elif url and url.startswith("http"):
+            download_dir = os.path.join(get_astrbot_data_path(), "temp")
+            video_file_path = os.path.join(download_dir, f"{uuid.uuid4().hex}")
+            await download_file(url, video_file_path)
+            if os.path.exists(video_file_path):
+                return os.path.abspath(video_file_path)
+            else:
+                raise Exception(f"download failed: {url}")
+        elif os.path.exists(url):
+            return os.path.abspath(url)
+        else:
+            raise Exception(f"not a valid file: {url}")
+
+    async def register_to_file_service(self):
+        """
+        将视频注册到文件服务。
+
+        Returns:
+            str: 注册后的URL
+
+        Raises:
+            Exception: 如果未配置 callback_api_base
+        """
+        callback_host = astrbot_config.get("callback_api_base")
+
+        if not callback_host:
+            raise Exception("未配置 callback_api_base，文件服务不可用")
+
+        file_path = await self.convert_to_file_path()
+
+        token = await file_token_service.register_file(file_path)
+
+        logger.debug(f"已注册：{callback_host}/api/file/{token}")
+
+        return f"{callback_host}/api/file/{token}"
+
+    async def to_dict(self):
+        """需要和 toDict 区分开，toDict 是同步方法"""
+        url_or_path = self.file
+        if url_or_path.startswith("http"):
+            payload_file = url_or_path
+        elif callback_host := astrbot_config.get("callback_api_base"):
+            callback_host = str(callback_host).removesuffix("/")
+            token = await file_token_service.register_file(url_or_path)
+            payload_file = f"{callback_host}/api/file/{token}"
+            logger.debug(f"Generated video file callback link: {payload_file}")
+        else:
+            payload_file = url_or_path
+        return {
+            "type": "video",
+            "data": {
+                "file": payload_file,
+            },
+        }
+
 
 class At(BaseMessageComponent):
-    type: ComponentType = "At"
+    type = ComponentType.At
     qq: T.Union[int, str]  # 此处str为all时代表所有人
     name: T.Optional[str] = ""
 
     def __init__(self, **_):
         super().__init__(**_)
+
+    def toDict(self):
+        return {
+            "type": "at",
+            "data": {"qq": str(self.qq)},
+        }
 
 
 class AtAll(At):
@@ -238,28 +351,28 @@ class AtAll(At):
 
 
 class RPS(BaseMessageComponent):  # TODO
-    type: ComponentType = "RPS"
+    type = ComponentType.RPS
 
     def __init__(self, **_):
         super().__init__(**_)
 
 
 class Dice(BaseMessageComponent):  # TODO
-    type: ComponentType = "Dice"
+    type = ComponentType.Dice
 
     def __init__(self, **_):
         super().__init__(**_)
 
 
 class Shake(BaseMessageComponent):  # TODO
-    type: ComponentType = "Shake"
+    type = ComponentType.Shake
 
     def __init__(self, **_):
         super().__init__(**_)
 
 
 class Anonymous(BaseMessageComponent):  # TODO
-    type: ComponentType = "Anonymous"
+    type = ComponentType.Anonymous
     ignore: T.Optional[bool] = False
 
     def __init__(self, **_):
@@ -267,7 +380,7 @@ class Anonymous(BaseMessageComponent):  # TODO
 
 
 class Share(BaseMessageComponent):
-    type: ComponentType = "Share"
+    type = ComponentType.Share
     url: str
     title: str
     content: T.Optional[str] = ""
@@ -278,7 +391,7 @@ class Share(BaseMessageComponent):
 
 
 class Contact(BaseMessageComponent):  # TODO
-    type: ComponentType = "Contact"
+    type = ComponentType.Contact
     _type: str  # type 字段冲突
     id: T.Optional[int] = 0
 
@@ -287,7 +400,7 @@ class Contact(BaseMessageComponent):  # TODO
 
 
 class Location(BaseMessageComponent):  # TODO
-    type: ComponentType = "Location"
+    type = ComponentType.Location
     lat: float
     lon: float
     title: T.Optional[str] = ""
@@ -298,7 +411,7 @@ class Location(BaseMessageComponent):  # TODO
 
 
 class Music(BaseMessageComponent):
-    type: ComponentType = "Music"
+    type = ComponentType.Music
     _type: str
     id: T.Optional[int] = 0
     url: T.Optional[str] = ""
@@ -315,7 +428,7 @@ class Music(BaseMessageComponent):
 
 
 class Image(BaseMessageComponent):
-    type: ComponentType = "Image"
+    type = ComponentType.Image
     file: T.Optional[str] = ""
     _type: T.Optional[str] = ""
     subType: T.Optional[int] = 0
@@ -358,23 +471,24 @@ class Image(BaseMessageComponent):
         Returns:
             str: 图片的本地路径，以绝对路径表示。
         """
-        url = self.url if self.url else self.file
-        if url and url.startswith("file:///"):
-            image_file_path = url[8:]
-            return image_file_path
-        elif url and url.startswith("http"):
+        url = self.url or self.file
+        if not url:
+            raise ValueError("No valid file or URL provided")
+        if url.startswith("file:///"):
+            return url[8:]
+        elif url.startswith("http"):
             image_file_path = await download_image_by_url(url)
             return os.path.abspath(image_file_path)
-        elif url and url.startswith("base64://"):
+        elif url.startswith("base64://"):
             bs64_data = url.removeprefix("base64://")
             image_bytes = base64.b64decode(bs64_data)
-            image_file_path = f"data/temp/{uuid.uuid4()}.jpg"
+            temp_dir = os.path.join(get_astrbot_data_path(), "temp")
+            image_file_path = os.path.join(temp_dir, f"{uuid.uuid4()}.jpg")
             with open(image_file_path, "wb") as f:
                 f.write(image_bytes)
             return os.path.abspath(image_file_path)
         elif os.path.exists(url):
-            image_file_path = url
-            return os.path.abspath(image_file_path)
+            return os.path.abspath(url)
         else:
             raise Exception(f"not a valid file: {url}")
 
@@ -385,37 +499,61 @@ class Image(BaseMessageComponent):
             str: 图片的 base64 编码，不以 base64:// 或者 data:image/jpeg;base64, 开头。
         """
         # convert to base64
-        url = self.url if self.url else self.file
-        if url and url.startswith("file:///"):
+        url = self.url or self.file
+        if not url:
+            raise ValueError("No valid file or URL provided")
+        if url.startswith("file:///"):
             bs64_data = file_to_base64(url[8:])
-        elif url and url.startswith("http"):
+        elif url.startswith("http"):
             image_file_path = await download_image_by_url(url)
             bs64_data = file_to_base64(image_file_path)
-        elif url and url.startswith("base64://"):
+        elif url.startswith("base64://"):
             bs64_data = url
         elif os.path.exists(url):
             bs64_data = file_to_base64(url)
         else:
             raise Exception(f"not a valid file: {url}")
+        bs64_data = bs64_data.removeprefix("base64://")
         return bs64_data
+
+    async def register_to_file_service(self) -> str:
+        """
+        将图片注册到文件服务。
+
+        Returns:
+            str: 注册后的URL
+
+        Raises:
+            Exception: 如果未配置 callback_api_base
+        """
+        callback_host = astrbot_config.get("callback_api_base")
+
+        if not callback_host:
+            raise Exception("未配置 callback_api_base，文件服务不可用")
+
+        file_path = await self.convert_to_file_path()
+
+        token = await file_token_service.register_file(file_path)
+
+        logger.debug(f"已注册：{callback_host}/api/file/{token}")
+
+        return f"{callback_host}/api/file/{token}"
 
 
 class Reply(BaseMessageComponent):
-    type: ComponentType = "Reply"
+    type = ComponentType.Reply
     id: T.Union[str, int]
     """所引用的消息 ID"""
     chain: T.Optional[T.List["BaseMessageComponent"]] = []
-    """引用的消息段列表"""
+    """被引用的消息段列表"""
     sender_id: T.Optional[int] | T.Optional[str] = 0
-    """引用的消息发送者 ID"""
+    """被引用的消息对应的发送者的 ID"""
     sender_nickname: T.Optional[str] = ""
-    """引用的消息发送者昵称"""
+    """被引用的消息对应的发送者的昵称"""
     time: T.Optional[int] = 0
-    """引用的消息发送时间"""
+    """被引用的消息发送时间"""
     message_str: T.Optional[str] = ""
-    """解析后的纯文本消息字符串"""
-    sender_str: T.Optional[str] = ""
-    """被引用的消息纯文本"""
+    """被引用的消息解析后的纯文本消息字符串"""
 
     text: T.Optional[str] = ""
     """deprecated"""
@@ -429,7 +567,7 @@ class Reply(BaseMessageComponent):
 
 
 class RedBag(BaseMessageComponent):
-    type: ComponentType = "RedBag"
+    type = ComponentType.RedBag
     title: str
 
     def __init__(self, **_):
@@ -437,7 +575,7 @@ class RedBag(BaseMessageComponent):
 
 
 class Poke(BaseMessageComponent):
-    type: str = ""
+    type: str = ComponentType.Poke
     id: T.Optional[int] = 0
     qq: T.Optional[int] = 0
 
@@ -447,7 +585,7 @@ class Poke(BaseMessageComponent):
 
 
 class Forward(BaseMessageComponent):
-    type: ComponentType = "Forward"
+    type = ComponentType.Forward
     id: str
 
     def __init__(self, **_):
@@ -457,46 +595,85 @@ class Forward(BaseMessageComponent):
 class Node(BaseMessageComponent):
     """群合并转发消息"""
 
-    type: ComponentType = "Node"
+    type = ComponentType.Node
     id: T.Optional[int] = 0  # 忽略
     name: T.Optional[str] = ""  # qq昵称
-    uin: T.Optional[int] = 0  # qq号
-    content: T.Optional[T.Union[str, list, dict]] = ""  # 子消息段列表
+    uin: T.Optional[str] = "0"  # qq号
+    content: T.Optional[list[BaseMessageComponent]] = []
     seq: T.Optional[T.Union[str, list]] = ""  # 忽略
-    time: T.Optional[int] = 0
+    time: T.Optional[int] = 0  # 忽略
 
-    def __init__(self, content: T.Union[str, list, dict, "Node", T.List["Node"]], **_):
-        if isinstance(content, list):
-            _content = None
-            if all(isinstance(item, Node) for item in content):
-                _content = [node.toDict() for node in content]
-            else:
-                _content = ""
-                for chain in content:
-                    _content += chain.toString()
-            content = _content
-        elif isinstance(content, Node):
-            content = content.toDict()
+    def __init__(self, content: list[BaseMessageComponent], **_):
+        if isinstance(content, Node):
+            # back
+            content = [content]
         super().__init__(content=content, **_)
 
-    def toString(self):
-        # logger.warn("Protocol: node doesn't support stringify")
-        return ""
+    async def to_dict(self):
+        data_content = []
+        for comp in self.content:
+            if isinstance(comp, (Image, Record)):
+                # For Image and Record segments, we convert them to base64
+                bs64 = await comp.convert_to_base64()
+                data_content.append(
+                    {
+                        "type": comp.type.lower(),
+                        "data": {"file": f"base64://{bs64}"},
+                    }
+                )
+            elif isinstance(comp, Plain):
+                # For Plain segments, we need to handle the plain differently
+                d = await comp.to_dict()
+                data_content.append(d)
+            elif isinstance(comp, File):
+                # For File segments, we need to handle the file differently
+                d = await comp.to_dict()
+                data_content.append(d)
+            elif isinstance(comp, (Node, Nodes)):
+                # For Node segments, we recursively convert them to dict
+                d = await comp.to_dict()
+                data_content.append(d)
+            else:
+                d = comp.toDict()
+                data_content.append(d)
+        return {
+            "type": "node",
+            "data": {
+                "user_id": str(self.uin),
+                "nickname": self.name,
+                "content": data_content,
+            },
+        }
 
 
 class Nodes(BaseMessageComponent):
-    type: ComponentType = "Nodes"
+    type = ComponentType.Nodes
     nodes: T.List[Node]
 
     def __init__(self, nodes: T.List[Node], **_):
         super().__init__(nodes=nodes, **_)
 
     def toDict(self):
-        return {"messages": [node.toDict() for node in self.nodes]}
+        """Deprecated. Use to_dict instead"""
+        ret = {
+            "messages": [],
+        }
+        for node in self.nodes:
+            d = node.toDict()
+            ret["messages"].append(d)
+        return ret
+
+    async def to_dict(self):
+        """将 Nodes 转换为字典格式，适用于 OneBot JSON 格式"""
+        ret = {"messages": []}
+        for node in self.nodes:
+            d = await node.to_dict()
+            ret["messages"].append(d)
+        return ret
 
 
 class Xml(BaseMessageComponent):
-    type: ComponentType = "Xml"
+    type = ComponentType.Xml
     data: str
     resid: T.Optional[int] = 0
 
@@ -505,7 +682,7 @@ class Xml(BaseMessageComponent):
 
 
 class Json(BaseMessageComponent):
-    type: ComponentType = "Json"
+    type = ComponentType.Json
     data: T.Union[str, dict]
     resid: T.Optional[int] = 0
 
@@ -516,7 +693,7 @@ class Json(BaseMessageComponent):
 
 
 class CardImage(BaseMessageComponent):
-    type: ComponentType = "CardImage"
+    type = ComponentType.CardImage
     file: str
     cache: T.Optional[bool] = True
     minwidth: T.Optional[int] = 400
@@ -535,7 +712,7 @@ class CardImage(BaseMessageComponent):
 
 
 class TTS(BaseMessageComponent):
-    type: ComponentType = "TTS"
+    type = ComponentType.TTS
     text: str
 
     def __init__(self, **_):
@@ -543,7 +720,7 @@ class TTS(BaseMessageComponent):
 
 
 class Unknown(BaseMessageComponent):
-    type: ComponentType = "Unknown"
+    type = ComponentType.Unknown
     text: str
 
     def toString(self):
@@ -552,19 +729,140 @@ class Unknown(BaseMessageComponent):
 
 class File(BaseMessageComponent):
     """
-    目前此消息段只适配了 Napcat。
+    文件消息段
     """
 
-    type: ComponentType = "File"
+    type = ComponentType.File
     name: T.Optional[str] = ""  # 名字
-    file: T.Optional[str] = ""  # url（本地路径）
+    file_: T.Optional[str] = ""  # 本地路径
+    url: T.Optional[str] = ""  # url
 
-    def __init__(self, name: str, file: str):
-        super().__init__(name=name, file=file)
+    def __init__(self, name: str, file: str = "", url: str = ""):
+        """文件消息段。"""
+        super().__init__(name=name, file_=file, url=url)
+
+    @property
+    def file(self) -> str:
+        """
+        获取文件路径，如果文件不存在但有URL，则同步下载文件
+
+        Returns:
+            str: 文件路径
+        """
+        if self.file_ and os.path.exists(self.file_):
+            return os.path.abspath(self.file_)
+
+        if self.url:
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    logger.warning(
+                        (
+                            "不可以在异步上下文中同步等待下载! "
+                            "这个警告通常发生于某些逻辑试图通过 <File>.file 获取文件消息段的文件内容。"
+                            "请使用 await get_file() 代替直接获取 <File>.file 字段"
+                        )
+                    )
+                    return ""
+                else:
+                    # 等待下载完成
+                    loop.run_until_complete(self._download_file())
+
+                    if self.file_ and os.path.exists(self.file_):
+                        return os.path.abspath(self.file_)
+            except Exception as e:
+                logger.error(f"文件下载失败: {e}")
+
+        return ""
+
+    @file.setter
+    def file(self, value: str):
+        """
+        向前兼容, 设置file属性, 传入的参数可能是文件路径或URL
+
+        Args:
+            value (str): 文件路径或URL
+        """
+        if value.startswith("http://") or value.startswith("https://"):
+            self.url = value
+        else:
+            self.file_ = value
+
+    async def get_file(self, allow_return_url: bool = False) -> str:
+        """异步获取文件。请注意在使用后清理下载的文件, 以免占用过多空间
+
+        Args:
+            allow_return_url: 是否允许以文件 http 下载链接的形式返回，这允许您自行控制是否需要下载文件。
+            注意，如果为 True，也可能返回文件路径。
+        Returns:
+            str: 文件路径或者 http 下载链接
+        """
+        if allow_return_url and self.url:
+            return self.url
+
+        if self.file_ and os.path.exists(self.file_):
+            return os.path.abspath(self.file_)
+
+        if self.url:
+            await self._download_file()
+            return os.path.abspath(self.file_)
+
+        return ""
+
+    async def _download_file(self):
+        """下载文件"""
+        download_dir = os.path.join(get_astrbot_data_path(), "temp")
+        os.makedirs(download_dir, exist_ok=True)
+        file_path = os.path.join(download_dir, f"{uuid.uuid4().hex}")
+        await download_file(self.url, file_path)
+        self.file_ = os.path.abspath(file_path)
+
+    async def register_to_file_service(self):
+        """
+        将文件注册到文件服务。
+
+        Returns:
+            str: 注册后的URL
+
+        Raises:
+            Exception: 如果未配置 callback_api_base
+        """
+        callback_host = astrbot_config.get("callback_api_base")
+
+        if not callback_host:
+            raise Exception("未配置 callback_api_base，文件服务不可用")
+
+        file_path = await self.get_file()
+
+        token = await file_token_service.register_file(file_path)
+
+        logger.debug(f"已注册：{callback_host}/api/file/{token}")
+
+        return f"{callback_host}/api/file/{token}"
+
+    async def to_dict(self):
+        """需要和 toDict 区分开，toDict 是同步方法"""
+        url_or_path = await self.get_file(allow_return_url=True)
+        if url_or_path.startswith("http"):
+            payload_file = url_or_path
+        elif callback_host := astrbot_config.get("callback_api_base"):
+            callback_host = str(callback_host).removesuffix("/")
+            token = await file_token_service.register_file(url_or_path)
+            payload_file = f"{callback_host}/api/file/{token}"
+            logger.debug(f"Generated file callback link: {payload_file}")
+        else:
+            payload_file = url_or_path
+        return {
+            "type": "file",
+            "data": {
+                "name": self.name,
+                "file": payload_file,
+            },
+        }
 
 
 class WechatEmoji(BaseMessageComponent):
-    type: ComponentType = "WechatEmoji"
+    type = ComponentType.WechatEmoji
     md5: T.Optional[str] = ""
     md5_len: T.Optional[int] = 0
     cdnurl: T.Optional[str] = ""

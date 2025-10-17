@@ -8,12 +8,16 @@ import base64
 import zipfile
 import uuid
 import psutil
+import logging
 
 import certifi
 
 from typing import Union
 
 from PIL import Image
+from .astrbot_path import get_astrbot_data_path
+
+logger = logging.getLogger("astrbot")
 
 
 def on_error(func, path, exc_info):
@@ -29,7 +33,7 @@ def on_error(func, path, exc_info):
         raise exc_info[1]
 
 
-def remove_dir(file_path) -> bool:
+def remove_dir(file_path: str) -> bool:
     if not os.path.exists(file_path):
         return True
     shutil.rmtree(file_path, onerror=on_error)
@@ -49,11 +53,11 @@ def port_checker(port: int, host: str = "localhost"):
 
 
 def save_temp_img(img: Union[Image.Image, str]) -> str:
-    os.makedirs("data/temp", exist_ok=True)
+    temp_dir = os.path.join(get_astrbot_data_path(), "temp")
     # 获得文件创建时间，清除超过 12 小时的
     try:
-        for f in os.listdir("data/temp"):
-            path = os.path.join("data/temp", f)
+        for f in os.listdir(temp_dir):
+            path = os.path.join(temp_dir, f)
             if os.path.isfile(path):
                 ctime = os.path.getctime(path)
                 if time.time() - ctime > 3600 * 12:
@@ -63,7 +67,7 @@ def save_temp_img(img: Union[Image.Image, str]) -> str:
 
     # 获得时间戳
     timestamp = f"{int(time.time())}_{uuid.uuid4().hex[:8]}"
-    p = f"data/temp/{timestamp}.jpg"
+    p = os.path.join(temp_dir, f"{timestamp}.jpg")
 
     if isinstance(img, Image.Image):
         img.save(p)
@@ -201,28 +205,48 @@ def get_local_ip_addresses():
 
 
 async def get_dashboard_version():
-    if os.path.exists("data/dist"):
-        if os.path.exists("data/dist/assets/version"):
-            with open("data/dist/assets/version", "r") as f:
+    dist_dir = os.path.join(get_astrbot_data_path(), "dist")
+    if os.path.exists(dist_dir):
+        version_file = os.path.join(dist_dir, "assets", "version")
+        if os.path.exists(version_file):
+            with open(version_file, "r") as f:
                 v = f.read().strip()
                 return v
     return None
 
 
-async def download_dashboard():
+async def download_dashboard(
+    path: str | None = None,
+    extract_path: str = "data",
+    latest: bool = True,
+    version: str | None = None,
+    proxy: str | None = None,
+):
     """下载管理面板文件"""
-    dashboard_release_url = "https://astrbot-registry.soulter.top/download/astrbot-dashboard/latest/dist.zip"
-    try:
-        await download_file(
-            dashboard_release_url, "data/dashboard.zip", show_progress=True
+    if path is None:
+        path = os.path.join(get_astrbot_data_path(), "dashboard.zip")
+
+    if latest or len(str(version)) != 40:
+        ver_name = "latest" if latest else version
+        dashboard_release_url = f"https://astrbot-registry.soulter.top/download/astrbot-dashboard/{ver_name}/dist.zip"
+        logger.info(
+            f"准备下载指定发行版本的 AstrBot WebUI 文件: {dashboard_release_url}"
         )
-    except BaseException as _:
-        dashboard_release_url = (
-            "https://github.com/Soulter/AstrBot/releases/latest/download/dist.zip"
-        )
-        await download_file(
-            dashboard_release_url, "data/dashboard.zip", show_progress=True
-        )
-    print("解压管理面板文件中...")
-    with zipfile.ZipFile("data/dashboard.zip", "r") as z:
-        z.extractall("data")
+        try:
+            await download_file(dashboard_release_url, path, show_progress=True)
+        except BaseException as _:
+            if latest:
+                dashboard_release_url = "https://github.com/Soulter/AstrBot/releases/latest/download/dist.zip"
+            else:
+                dashboard_release_url = f"https://github.com/Soulter/AstrBot/releases/download/{version}/dist.zip"
+            if proxy:
+                dashboard_release_url = f"{proxy}/{dashboard_release_url}"
+            await download_file(dashboard_release_url, path, show_progress=True)
+    else:
+        url = f"https://github.com/AstrBotDevs/astrbot-release-harbour/releases/download/release-{version}/dist.zip"
+        logger.info(f"准备下载指定版本的 AstrBot WebUI: {url}")
+        if proxy:
+            url = f"{proxy}/{url}"
+        await download_file(url, path, show_progress=True)
+    with zipfile.ZipFile(path, "r") as z:
+        z.extractall(extract_path)

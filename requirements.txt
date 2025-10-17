@@ -1,12 +1,13 @@
-pydantic~=2.10.3
 aiohttp
+pydantic~=2.10.3
+psutil>=5.8.0
 openai
 anthropic
 qq-botpy
 chardet~=5.1.0
 Pillow
 beautifulsoup4
-googlesearch-python
+mi-googlesearch-python
 readability-lxml
 quart
 lxml_html_clean
@@ -17,7 +18,6 @@ apscheduler
 docstring_parser
 aiodocker
 silk-python
-psutil>=5.8.0
 lark-oapi
 ormsgpack
 cryptography
@@ -30,3 +30,17 @@ mcp
 certifi
 pip
 telegramify-markdown
+google-genai
+click
+filelock
+watchfiles
+websockets
+faiss-cpu
+aiosqlite
+py-cord>=2.6.1
+slack-sdk
+pydub
+sqlmodel
+deprecated
+sqlalchemy[asyncio]
+audioop-lts; python_version>='3.13'

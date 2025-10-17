@@ -1,17 +1,19 @@
-import time
 import re
+import time
 import traceback
-from typing import Union, AsyncGenerator
-from ..stage import Stage, register_stage, registered_stages
-from ..context import PipelineContext
-from astrbot.core.platform.astr_message_event import AstrMessageEvent
+from typing import AsyncGenerator, Union
+
+from astrbot.core import file_token_service, html_renderer, logger
+from astrbot.core.message.components import At, File, Image, Node, Plain, Record, Reply
 from astrbot.core.message.message_event_result import ResultContentType
+from astrbot.core.platform.astr_message_event import AstrMessageEvent
 from astrbot.core.platform.message_type import MessageType
-from astrbot.core import logger
-from astrbot.core.message.components import Plain, Image, At, Reply, Record, File, Node
-from astrbot.core import html_renderer
-from astrbot.core.star.star_handler import star_handlers_registry, EventType
+from astrbot.core.star.session_llm_manager import SessionServiceManager
 from astrbot.core.star.star import star_map
+from astrbot.core.star.star_handler import EventType, star_handlers_registry
+
+from ..context import PipelineContext
+from ..stage import Stage, register_stage, registered_stages
 
 
 @register_stage
@@ -34,6 +36,7 @@ class ResultDecorateStage(Stage):
             self.t2i_word_threshold = 150
         self.t2i_strategy = ctx.astrbot_config["t2i_strategy"]
         self.t2i_use_network = self.t2i_strategy == "remote"
+        self.t2i_active_template = ctx.astrbot_config["t2i_active_template"]
 
         self.forward_threshold = ctx.astrbot_config["platform_settings"][
             "forward_threshold"
@@ -62,9 +65,10 @@ class ResultDecorateStage(Stage):
         ]
         self.content_safe_check_stage = None
         if self.content_safe_check_reply:
-            for stage in registered_stages:
-                if stage.__class__.__name__ == "ContentSafetyCheckStage":
-                    self.content_safe_check_stage = stage
+            for stage_cls in registered_stages:
+                if stage_cls.__name__ == "ContentSafetyCheckStage":
+                    self.content_safe_check_stage = stage_cls()
+                    await self.content_safe_check_stage.initialize(ctx)
 
     async def process(
         self, event: AstrMessageEvent
@@ -96,7 +100,7 @@ class ResultDecorateStage(Stage):
 
         # 发送消息前事件钩子
         handlers = star_handlers_registry.get_handlers_by_event_type(
-            EventType.OnDecoratingResultEvent, platform_id=event.get_platform_id()
+            EventType.OnDecoratingResultEvent, plugins_name=event.plugins_name
         )
         for handler in handlers:
             try:
@@ -140,7 +144,11 @@ class ResultDecorateStage(Stage):
                         break
 
             # 分段回复
-            if self.enable_segmented_reply:
+            if self.enable_segmented_reply and event.get_platform_name() not in [
+                "qq_official",
+                "weixin_official_account",
+                "dingtalk",
+            ]:
                 if (
                     self.only_llm_result and result.is_llm_result()
                 ) or not self.only_llm_result:
@@ -151,9 +159,9 @@ class ResultDecorateStage(Stage):
                                 # 不分段回复
                                 new_chain.append(comp)
                                 continue
-                            split_response = []
-                            for line in comp.text.split("\n"):
-                                split_response.extend(re.findall(self.regex, line))
+                            split_response = re.findall(
+                                self.regex, comp.text, re.DOTALL | re.MULTILINE
+                            )
                             if not split_response:
                                 new_chain.append(comp)
                                 continue
@@ -168,34 +176,67 @@ class ResultDecorateStage(Stage):
                     result.chain = new_chain
 
             # TTS
+            tts_provider = self.ctx.plugin_manager.context.get_using_tts_provider(
+                event.unified_msg_origin
+            )
+
             if (
                 self.ctx.astrbot_config["provider_tts_settings"]["enable"]
                 and result.is_llm_result()
+                and SessionServiceManager.should_process_tts_request(event)
             ):
-                tts_provider = self.ctx.plugin_manager.context.provider_manager.curr_tts_provider_inst
-                new_chain = []
-                for comp in result.chain:
-                    if isinstance(comp, Plain) and len(comp.text) > 1:
-                        try:
-                            logger.info("TTS 请求: " + comp.text)
-                            audio_path = await tts_provider.get_audio(comp.text)
-                            logger.info("TTS 结果: " + audio_path)
-                            if audio_path:
+                if not tts_provider:
+                    logger.warning(
+                        f"会话 {event.unified_msg_origin} 未配置文本转语音模型。"
+                    )
+                else:
+                    new_chain = []
+                    for comp in result.chain:
+                        if isinstance(comp, Plain) and len(comp.text) > 1:
+                            try:
+                                logger.info(f"TTS 请求: {comp.text}")
+                                audio_path = await tts_provider.get_audio(comp.text)
+                                logger.info(f"TTS 结果: {audio_path}")
+                                if not audio_path:
+                                    logger.error(
+                                        f"由于 TTS 音频文件未找到，消息段转语音失败: {comp.text}"
+                                    )
+                                    new_chain.append(comp)
+                                    continue
+
+                                use_file_service = self.ctx.astrbot_config[
+                                    "provider_tts_settings"
+                                ]["use_file_service"]
+                                callback_api_base = self.ctx.astrbot_config[
+                                    "callback_api_base"
+                                ]
+                                dual_output = self.ctx.astrbot_config[
+                                    "provider_tts_settings"
+                                ]["dual_output"]
+
+                                url = None
+                                if use_file_service and callback_api_base:
+                                    token = await file_token_service.register_file(
+                                        audio_path
+                                    )
+                                    url = f"{callback_api_base}/api/file/{token}"
+                                    logger.debug(f"已注册：{url}")
+
                                 new_chain.append(
-                                    Record(file=audio_path, url=audio_path)
+                                    Record(
+                                        file=url or audio_path,
+                                        url=url or audio_path,
+                                    )
                                 )
-                            else:
-                                logger.error(
-                                    f"由于 TTS 音频文件没找到，消息段转语音失败: {comp.text}"
-                                )
+                                if dual_output:
+                                    new_chain.append(comp)
+                            except Exception:
+                                logger.error(traceback.format_exc())
+                                logger.error("TTS 失败，使用文本发送。")
                                 new_chain.append(comp)
-                        except BaseException:
-                            logger.error(traceback.format_exc())
-                            logger.error("TTS 失败，使用文本发送。")
+                        else:
                             new_chain.append(comp)
-                    else:
-                        new_chain.append(comp)
-                result.chain = new_chain
+                    result.chain = new_chain
 
             # 文本转图片
             elif (
@@ -211,7 +252,10 @@ class ResultDecorateStage(Stage):
                     render_start = time.time()
                     try:
                         url = await html_renderer.render_t2i(
-                            plain_str, return_url=True, use_network=self.t2i_use_network
+                            plain_str,
+                            return_url=True,
+                            use_network=self.t2i_use_network,
+                            template_name=self.t2i_active_template,
                         )
                     except BaseException:
                         logger.error("文本转图片失败，使用文本发送。")
@@ -223,11 +267,18 @@ class ResultDecorateStage(Stage):
                     if url:
                         if url.startswith("http"):
                             result.chain = [Image.fromURL(url)]
+                        elif (
+                            self.ctx.astrbot_config["t2i_use_file_service"]
+                            and self.ctx.astrbot_config["callback_api_base"]
+                        ):
+                            token = await file_token_service.register_file(url)
+                            url = f"{self.ctx.astrbot_config['callback_api_base']}/api/file/{token}"
+                            logger.debug(f"已注册：{url}")
+                            result.chain = [Image.fromURL(url)]
                         else:
                             result.chain = [Image.fromFileSystem(url)]
 
             # 触发转发消息
-            has_forwarded = False
             if event.get_platform_name() == "aiocqhttp":
                 word_cnt = 0
                 for comp in result.chain:
@@ -238,9 +289,9 @@ class ResultDecorateStage(Stage):
                         uin=event.get_self_id(), name="AstrBot", content=[*result.chain]
                     )
                     result.chain = [node]
-                    has_forwarded = True
 
-            if not has_forwarded:
+            has_plain = any(isinstance(item, Plain) for item in result.chain)
+            if has_plain:
                 # at 回复
                 if (
                     self.reply_with_mention

@@ -1,5 +1,6 @@
 import traceback
 import asyncio
+import random
 from typing import Union, AsyncGenerator
 from ..stage import Stage, register_stage
 from ..context import PipelineContext
@@ -22,6 +23,26 @@ class PreProcessStage(Stage):
         self, event: AstrMessageEvent
     ) -> Union[None, AsyncGenerator[None, None]]:
         """在处理事件之前的预处理"""
+        # 平台特异配置：platform_specific.<platform>.pre_ack_emoji
+        supported = {"telegram", "lark"}
+        platform = event.get_platform_name()
+        cfg = (
+            self.config.get("platform_specific", {})
+            .get(platform, {})
+            .get("pre_ack_emoji", {})
+        ) or {}
+        emojis = cfg.get("emojis") or []
+        if (
+            cfg.get("enable", False)
+            and platform in supported
+            and emojis
+            and event.is_at_or_wake_command
+        ):
+            try:
+                await event.react(random.choice(emojis))
+            except Exception as e:
+                logger.warning(f"{platform} 预回应表情发送失败: {e}")
+
         # 路径映射
         if mappings := self.platform_settings.get("path_mapping", []):
             # 支持 Record，Image 消息段的路径映射。
@@ -43,31 +64,34 @@ class PreProcessStage(Stage):
         # STT
         if self.stt_settings.get("enable", False):
             # TODO: 独立
-            stt_provider = (
-                self.plugin_manager.context.provider_manager.curr_stt_provider_inst
-            )
-            if stt_provider:
-                message_chain = event.get_messages()
-                for idx, component in enumerate(message_chain):
-                    if isinstance(component, Record) and component.url:
-                        path = component.url.removeprefix("file://")
-                        retry = 5
-                        for i in range(retry):
-                            try:
-                                result = await stt_provider.get_text(audio_url=path)
-                                if result:
-                                    logger.info("语音转文本结果: " + result)
-                                    message_chain[idx] = Plain(result)
-                                    event.message_str += result
-                                    event.message_obj.message_str += result
-                                break
-                            except FileNotFoundError as e:
-                                # napcat workaround
-                                logger.warning(e)
-                                logger.warning(f"重试中: {i + 1}/{retry}")
-                                await asyncio.sleep(0.5)
-                                continue
-                            except BaseException as e:
-                                logger.error(traceback.format_exc())
-                                logger.error(f"语音转文本失败: {e}")
-                                break
+            ctx = self.plugin_manager.context
+            stt_provider = ctx.get_using_stt_provider(event.unified_msg_origin)
+            if not stt_provider:
+                logger.warning(
+                    f"会话 {event.unified_msg_origin} 未配置语音转文本模型。"
+                )
+                return
+            message_chain = event.get_messages()
+            for idx, component in enumerate(message_chain):
+                if isinstance(component, Record) and component.url:
+                    path = component.url.removeprefix("file://")
+                    retry = 5
+                    for i in range(retry):
+                        try:
+                            result = await stt_provider.get_text(audio_url=path)
+                            if result:
+                                logger.info("语音转文本结果: " + result)
+                                message_chain[idx] = Plain(result)
+                                event.message_str += result
+                                event.message_obj.message_str += result
+                            break
+                        except FileNotFoundError as e:
+                            # napcat workaround
+                            logger.warning(e)
+                            logger.warning(f"重试中: {i + 1}/{retry}")
+                            await asyncio.sleep(0.5)
+                            continue
+                        except BaseException as e:
+                            logger.error(traceback.format_exc())
+                            logger.error(f"语音转文本失败: {e}")
+                            break

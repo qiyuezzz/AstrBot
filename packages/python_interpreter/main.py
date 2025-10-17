@@ -15,6 +15,7 @@ from astrbot.api.event import filter
 from astrbot.api.provider import ProviderRequest
 from astrbot.api.message_components import Image, File
 from astrbot.core.utils.io import download_image_by_url, download_file
+from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
 PROMPT = """
 ## Task
@@ -90,15 +91,9 @@ DEFAULT_CONFIG = {
     },
     "docker_host_astrbot_abs_path": "",
 }
-PATH = "data/config/python_interpreter.json"
+PATH = os.path.join(get_astrbot_data_path(), "config", "python_interpreter.json")
 
 
-@star.register(
-    name="astrbot-python-interpreter",
-    desc="Python 代码执行器",
-    author="Soulter",
-    version="0.0.1",
-)
 class Main(star.Star):
     """基于 Docker 沙箱的 Python 代码执行器"""
 
@@ -134,9 +129,9 @@ class Main(star.Star):
             logger.info(
                 "Docker 不可用，代码解释器将无法使用，astrbot-python-interpreter 将自动禁用。"
             )
-            await self.context._star_manager.turn_off_plugin(
-                "astrbot-python-interpreter"
-            )
+            # await self.context._star_manager.turn_off_plugin(
+            #     "astrbot-python-interpreter"
+            # )
 
     async def file_upload(self, file_path: str):
         """
@@ -210,12 +205,14 @@ class Main(star.Star):
             return
         for comp in event.message_obj.message:
             if isinstance(comp, File):
-                if comp.file.startswith("http"):
+                file_path = await comp.get_file()
+                if file_path.startswith("http"):
                     name = comp.name if comp.name else uuid.uuid4().hex[:8]
-                    path = f"data/temp/{name}"
-                    await download_file(comp.file, path)
+                    temp_dir = os.path.join(get_astrbot_data_path(), "temp")
+                    path = os.path.join(temp_dir, name)
+                    await download_file(file_path, path)
                 else:
-                    path = comp.file
+                    path = file_path
                 self.user_file_msg_buffer[event.get_session_id()].append(path)
                 logger.debug(f"User {uid} uploaded file: {path}")
                 yield event.plain_result(f"代码执行器: 文件已经上传: {path}")
@@ -467,11 +464,11 @@ class Main(star.Star):
                         yield event.image_result(image_path)
                     elif match.group(1) == "FILE":
                         file_path = os.path.join(workplace_path, match.group(2))
-                        logger.debug(f"Sending file: {file_path}")
-                        file_s3_url = await self.file_upload(file_path)
-                        logger.info(f"文件上传到 AstrBot 云节点: {file_s3_url}")
+                        # logger.debug(f"Sending file: {file_path}")
+                        # file_s3_url = await self.file_upload(file_path)
+                        # logger.info(f"文件上传到 AstrBot 云节点: {file_s3_url}")
                         file_name = os.path.basename(file_path)
-                        chain = [File(name=file_name, file=file_s3_url)]
+                        chain = [File(name=file_name, file=file_path)]
                         yield event.set_result(MessageEventResult(chain=chain))
 
                 elif "Traceback (most recent call last)" in log or "[Error]: " in log:
