@@ -1,16 +1,19 @@
 """知识库管理 API 路由"""
 
-import uuid
-import aiofiles
+import asyncio
 import os
 import traceback
-import asyncio
+import uuid
+
+import aiofiles
 from quart import request
+
 from astrbot.core import logger
 from astrbot.core.core_lifecycle import AstrBotCoreLifecycle
-from .route import Route, Response, RouteContext
-from ..utils import generate_tsne_visualization
 from astrbot.core.provider.provider import EmbeddingProvider, RerankProvider
+
+from ..utils import generate_tsne_visualization
+from .route import Response, Route, RouteContext
 
 
 class KnowledgeBaseRoute(Route):
@@ -45,6 +48,7 @@ class KnowledgeBaseRoute(Route):
             # 文档管理
             "/kb/document/list": ("GET", self.list_documents),
             "/kb/document/upload": ("POST", self.upload_document),
+            "/kb/document/upload/url": ("POST", self.upload_document_from_url),
             "/kb/document/upload/progress": ("GET", self.get_upload_progress),
             "/kb/document/get": ("GET", self.get_document),
             "/kb/document/delete": ("POST", self.delete_document),
@@ -108,7 +112,7 @@ class KnowledgeBaseRoute(Route):
                             "stage": "parsing",
                             "current": 0,
                             "total": 100,
-                        }
+                        },
                     )
 
                     # 创建进度回调函数
@@ -122,7 +126,7 @@ class KnowledgeBaseRoute(Route):
                                     "stage": stage,
                                     "current": current,
                                     "total": total,
-                                }
+                                },
                             )
 
                     doc = await kb_helper.upload_document(
@@ -141,7 +145,7 @@ class KnowledgeBaseRoute(Route):
                 except Exception as e:
                     logger.error(f"上传文档 {file_info['file_name']} 失败: {e}")
                     failed_docs.append(
-                        {"file_name": file_info["file_name"], "error": str(e)}
+                        {"file_name": file_info["file_name"], "error": str(e)},
                     )
 
             # 更新任务完成状态
@@ -202,7 +206,7 @@ class KnowledgeBaseRoute(Route):
         except Exception as e:
             logger.error(f"获取知识库列表失败: {e}")
             logger.error(traceback.format_exc())
-            return Response().error(f"获取知识库列表失败: {str(e)}").__dict__
+            return Response().error(f"获取知识库列表失败: {e!s}").__dict__
 
     async def create_kb(self):
         """创建知识库
@@ -240,7 +244,7 @@ class KnowledgeBaseRoute(Route):
             if not embedding_provider_id:
                 return Response().error("缺少参数 embedding_provider_id").__dict__
             prv = await kb_manager.provider_manager.get_provider_by_id(
-                embedding_provider_id
+                embedding_provider_id,
             )  # type: ignore
             if not prv or not isinstance(prv, EmbeddingProvider):
                 return (
@@ -250,15 +254,15 @@ class KnowledgeBaseRoute(Route):
                 vec = await prv.get_embedding("astrbot")
                 if len(vec) != prv.get_dim():
                     raise ValueError(
-                        f"嵌入向量维度不匹配，实际是 {len(vec)}，然而配置是 {prv.get_dim()}"
+                        f"嵌入向量维度不匹配，实际是 {len(vec)}，然而配置是 {prv.get_dim()}",
                     )
             except Exception as e:
-                return Response().error(f"测试嵌入模型失败: {str(e)}").__dict__
+                return Response().error(f"测试嵌入模型失败: {e!s}").__dict__
             # pre-check rerank
             if rerank_provider_id:
                 rerank_prv: RerankProvider = (
                     await kb_manager.provider_manager.get_provider_by_id(
-                        rerank_provider_id
+                        rerank_provider_id,
                     )
                 )  # type: ignore
                 if not rerank_prv:
@@ -266,14 +270,15 @@ class KnowledgeBaseRoute(Route):
                 # 检查重排序模型可用性
                 try:
                     res = await rerank_prv.rerank(
-                        query="astrbot", documents=["astrbot knowledge base"]
+                        query="astrbot",
+                        documents=["astrbot knowledge base"],
                     )
                     if not res:
                         raise ValueError("重排序模型返回结果异常")
                 except Exception as e:
                     return (
                         Response()
-                        .error(f"测试重排序模型失败: {str(e)}，请检查控制台日志输出。")
+                        .error(f"测试重排序模型失败: {e!s}，请检查控制台日志输出。")
                         .__dict__
                     )
 
@@ -298,7 +303,7 @@ class KnowledgeBaseRoute(Route):
         except Exception as e:
             logger.error(f"创建知识库失败: {e}")
             logger.error(traceback.format_exc())
-            return Response().error(f"创建知识库失败: {str(e)}").__dict__
+            return Response().error(f"创建知识库失败: {e!s}").__dict__
 
     async def get_kb(self):
         """获取知识库详情
@@ -324,7 +329,7 @@ class KnowledgeBaseRoute(Route):
         except Exception as e:
             logger.error(f"获取知识库详情失败: {e}")
             logger.error(traceback.format_exc())
-            return Response().error(f"获取知识库详情失败: {str(e)}").__dict__
+            return Response().error(f"获取知识库详情失败: {e!s}").__dict__
 
     async def update_kb(self):
         """更新知识库
@@ -404,7 +409,7 @@ class KnowledgeBaseRoute(Route):
         except Exception as e:
             logger.error(f"更新知识库失败: {e}")
             logger.error(traceback.format_exc())
-            return Response().error(f"更新知识库失败: {str(e)}").__dict__
+            return Response().error(f"更新知识库失败: {e!s}").__dict__
 
     async def delete_kb(self):
         """删除知识库
@@ -431,7 +436,7 @@ class KnowledgeBaseRoute(Route):
         except Exception as e:
             logger.error(f"删除知识库失败: {e}")
             logger.error(traceback.format_exc())
-            return Response().error(f"删除知识库失败: {str(e)}").__dict__
+            return Response().error(f"删除知识库失败: {e!s}").__dict__
 
     async def get_kb_stats(self):
         """获取知识库统计信息
@@ -466,7 +471,7 @@ class KnowledgeBaseRoute(Route):
         except Exception as e:
             logger.error(f"获取知识库统计失败: {e}")
             logger.error(traceback.format_exc())
-            return Response().error(f"获取知识库统计失败: {str(e)}").__dict__
+            return Response().error(f"获取知识库统计失败: {e!s}").__dict__
 
     # ===== 文档管理 API =====
 
@@ -508,7 +513,7 @@ class KnowledgeBaseRoute(Route):
         except Exception as e:
             logger.error(f"获取文档列表失败: {e}")
             logger.error(traceback.format_exc())
-            return Response().error(f"获取文档列表失败: {str(e)}").__dict__
+            return Response().error(f"获取文档列表失败: {e!s}").__dict__
 
     async def upload_document(self):
         """上传文档
@@ -597,7 +602,7 @@ class KnowledgeBaseRoute(Route):
                             "file_name": file_name,
                             "file_content": file_content,
                             "file_type": file_type,
-                        }
+                        },
                     )
                 finally:
                     # 清理临时文件
@@ -630,7 +635,7 @@ class KnowledgeBaseRoute(Route):
                     batch_size=batch_size,
                     tasks_limit=tasks_limit,
                     max_retries=max_retries,
-                )
+                ),
             )
 
             return (
@@ -640,7 +645,7 @@ class KnowledgeBaseRoute(Route):
                         "task_id": task_id,
                         "file_count": len(files_to_upload),
                         "message": "task created, processing in background",
-                    }
+                    },
                 )
                 .__dict__
             )
@@ -650,7 +655,7 @@ class KnowledgeBaseRoute(Route):
         except Exception as e:
             logger.error(f"上传文档失败: {e}")
             logger.error(traceback.format_exc())
-            return Response().error(f"上传文档失败: {str(e)}").__dict__
+            return Response().error(f"上传文档失败: {e!s}").__dict__
 
     async def get_upload_progress(self):
         """获取上传进度和结果
@@ -703,7 +708,7 @@ class KnowledgeBaseRoute(Route):
         except Exception as e:
             logger.error(f"获取上传进度失败: {e}")
             logger.error(traceback.format_exc())
-            return Response().error(f"获取上传进度失败: {str(e)}").__dict__
+            return Response().error(f"获取上传进度失败: {e!s}").__dict__
 
     async def get_document(self):
         """获取文档详情
@@ -734,7 +739,7 @@ class KnowledgeBaseRoute(Route):
         except Exception as e:
             logger.error(f"获取文档详情失败: {e}")
             logger.error(traceback.format_exc())
-            return Response().error(f"获取文档详情失败: {str(e)}").__dict__
+            return Response().error(f"获取文档详情失败: {e!s}").__dict__
 
     async def delete_document(self):
         """删除文档
@@ -766,7 +771,7 @@ class KnowledgeBaseRoute(Route):
         except Exception as e:
             logger.error(f"删除文档失败: {e}")
             logger.error(traceback.format_exc())
-            return Response().error(f"删除文档失败: {str(e)}").__dict__
+            return Response().error(f"删除文档失败: {e!s}").__dict__
 
     async def delete_chunk(self):
         """删除文本块
@@ -801,7 +806,7 @@ class KnowledgeBaseRoute(Route):
         except Exception as e:
             logger.error(f"删除文本块失败: {e}")
             logger.error(traceback.format_exc())
-            return Response().error(f"删除文本块失败: {str(e)}").__dict__
+            return Response().error(f"删除文本块失败: {e!s}").__dict__
 
     async def list_chunks(self):
         """获取块列表
@@ -827,7 +832,9 @@ class KnowledgeBaseRoute(Route):
             if not kb_helper:
                 return Response().error("知识库不存在").__dict__
             chunk_list = await kb_helper.get_chunks_by_doc_id(
-                doc_id=doc_id, offset=offset, limit=limit
+                doc_id=doc_id,
+                offset=offset,
+                limit=limit,
             )
             return (
                 Response()
@@ -837,7 +844,7 @@ class KnowledgeBaseRoute(Route):
                         "page": page,
                         "page_size": page_size,
                         "total": await kb_helper.get_chunk_count_by_doc_id(doc_id),
-                    }
+                    },
                 )
                 .__dict__
             )
@@ -846,7 +853,7 @@ class KnowledgeBaseRoute(Route):
         except Exception as e:
             logger.error(f"获取块列表失败: {e}")
             logger.error(traceback.format_exc())
-            return Response().error(f"获取块列表失败: {str(e)}").__dict__
+            return Response().error(f"获取块列表失败: {e!s}").__dict__
 
     # ===== 检索 API =====
 
@@ -893,7 +900,9 @@ class KnowledgeBaseRoute(Route):
             if debug:
                 try:
                     img_base64 = await generate_tsne_visualization(
-                        query, kb_names, kb_manager
+                        query,
+                        kb_names,
+                        kb_manager,
                     )
                     if img_base64:
                         response_data["visualization"] = img_base64
@@ -909,7 +918,7 @@ class KnowledgeBaseRoute(Route):
         except Exception as e:
             logger.error(f"检索失败: {e}")
             logger.error(traceback.format_exc())
-            return Response().error(f"检索失败: {str(e)}").__dict__
+            return Response().error(f"检索失败: {e!s}").__dict__
 
     # ===== 会话知识库配置 API =====
 
@@ -945,7 +954,7 @@ class KnowledgeBaseRoute(Route):
 
         except Exception as e:
             logger.error(f"[KB配置] 获取配置时出错: {e}", exc_info=True)
-            return Response().error(f"获取会话知识库配置失败: {str(e)}").__dict__
+            return Response().error(f"获取会话知识库配置失败: {e!s}").__dict__
 
     async def set_session_kb_config(self):
         """设置会话的知识库配置
@@ -1024,13 +1033,12 @@ class KnowledgeBaseRoute(Route):
                     )
                     .__dict__
                 )
-            else:
-                logger.error("[KB配置] 配置保存失败，验证不匹配")
-                return Response().error("配置保存失败").__dict__
+            logger.error("[KB配置] 配置保存失败，验证不匹配")
+            return Response().error("配置保存失败").__dict__
 
         except Exception as e:
             logger.error(f"[KB配置] 设置配置时出错: {e}", exc_info=True)
-            return Response().error(f"设置会话知识库配置失败: {str(e)}").__dict__
+            return Response().error(f"设置会话知识库配置失败: {e!s}").__dict__
 
     async def delete_session_kb_config(self):
         """删除会话的知识库配置
@@ -1062,4 +1070,175 @@ class KnowledgeBaseRoute(Route):
         except Exception as e:
             logger.error(f"删除会话知识库配置失败: {e}")
             logger.error(traceback.format_exc())
-            return Response().error(f"删除会话知识库配置失败: {str(e)}").__dict__
+            return Response().error(f"删除会话知识库配置失败: {e!s}").__dict__
+
+    async def upload_document_from_url(self):
+        """从 URL 上传文档
+
+        Body:
+        - kb_id: 知识库 ID (必填)
+        - url: 要提取内容的网页 URL (必填)
+        - chunk_size: 分块大小 (可选, 默认512)
+        - chunk_overlap: 块重叠大小 (可选, 默认50)
+        - batch_size: 批处理大小 (可选, 默认32)
+        - tasks_limit: 并发任务限制 (可选, 默认3)
+        - max_retries: 最大重试次数 (可选, 默认3)
+
+        返回:
+        - task_id: 任务ID，用于查询上传进度和结果
+        """
+        try:
+            kb_manager = self._get_kb_manager()
+            data = await request.json
+
+            kb_id = data.get("kb_id")
+            if not kb_id:
+                return Response().error("缺少参数 kb_id").__dict__
+
+            url = data.get("url")
+            if not url:
+                return Response().error("缺少参数 url").__dict__
+
+            chunk_size = data.get("chunk_size", 512)
+            chunk_overlap = data.get("chunk_overlap", 50)
+            batch_size = data.get("batch_size", 32)
+            tasks_limit = data.get("tasks_limit", 3)
+            max_retries = data.get("max_retries", 3)
+            enable_cleaning = data.get("enable_cleaning", False)
+            cleaning_provider_id = data.get("cleaning_provider_id")
+
+            # 获取知识库
+            kb_helper = await kb_manager.get_kb(kb_id)
+            if not kb_helper:
+                return Response().error("知识库不存在").__dict__
+
+            # 生成任务ID
+            task_id = str(uuid.uuid4())
+
+            # 初始化任务状态
+            self.upload_tasks[task_id] = {
+                "status": "pending",
+                "result": None,
+                "error": None,
+            }
+
+            # 启动后台任务
+            asyncio.create_task(
+                self._background_upload_from_url_task(
+                    task_id=task_id,
+                    kb_helper=kb_helper,
+                    url=url,
+                    chunk_size=chunk_size,
+                    chunk_overlap=chunk_overlap,
+                    batch_size=batch_size,
+                    tasks_limit=tasks_limit,
+                    max_retries=max_retries,
+                    enable_cleaning=enable_cleaning,
+                    cleaning_provider_id=cleaning_provider_id,
+                ),
+            )
+
+            return (
+                Response()
+                .ok(
+                    {
+                        "task_id": task_id,
+                        "url": url,
+                        "message": "URL upload task created, processing in background",
+                    },
+                )
+                .__dict__
+            )
+
+        except ValueError as e:
+            return Response().error(str(e)).__dict__
+        except Exception as e:
+            logger.error(f"从URL上传文档失败: {e}")
+            logger.error(traceback.format_exc())
+            return Response().error(f"从URL上传文档失败: {e!s}").__dict__
+
+    async def _background_upload_from_url_task(
+        self,
+        task_id: str,
+        kb_helper,
+        url: str,
+        chunk_size: int,
+        chunk_overlap: int,
+        batch_size: int,
+        tasks_limit: int,
+        max_retries: int,
+        enable_cleaning: bool,
+        cleaning_provider_id: str | None,
+    ):
+        """后台上传URL任务"""
+        try:
+            # 初始化任务状态
+            self.upload_tasks[task_id] = {
+                "status": "processing",
+                "result": None,
+                "error": None,
+            }
+            self.upload_progress[task_id] = {
+                "status": "processing",
+                "file_index": 0,
+                "file_total": 1,
+                "file_name": f"URL: {url}",
+                "stage": "extracting",
+                "current": 0,
+                "total": 100,
+            }
+
+            # 创建进度回调函数
+            async def progress_callback(stage, current, total):
+                if task_id in self.upload_progress:
+                    self.upload_progress[task_id].update(
+                        {
+                            "status": "processing",
+                            "file_index": 0,
+                            "file_name": f"URL: {url}",
+                            "stage": stage,
+                            "current": current,
+                            "total": total,
+                        },
+                    )
+
+            # 上传文档
+            doc = await kb_helper.upload_from_url(
+                url=url,
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                batch_size=batch_size,
+                tasks_limit=tasks_limit,
+                max_retries=max_retries,
+                progress_callback=progress_callback,
+                enable_cleaning=enable_cleaning,
+                cleaning_provider_id=cleaning_provider_id,
+            )
+
+            # 更新任务完成状态
+            result = {
+                "task_id": task_id,
+                "uploaded": [doc.model_dump()],
+                "failed": [],
+                "total": 1,
+                "success_count": 1,
+                "failed_count": 0,
+            }
+
+            self.upload_tasks[task_id] = {
+                "status": "completed",
+                "result": result,
+                "error": None,
+            }
+            self.upload_progress[task_id]["status"] = "completed"
+
+        except Exception as e:
+            logger.error(f"后台上传URL任务 {task_id} 失败: {e}")
+            logger.error(traceback.format_exc())
+            self.upload_tasks[task_id] = {
+                "status": "failed",
+                "result": None,
+                "error": str(e),
+            }
+            if task_id in self.upload_progress:
+                self.upload_progress[task_id]["status"] = "failed"

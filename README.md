@@ -8,7 +8,7 @@
 
 <div>
 <a href="https://trendshift.io/repositories/12875" target="_blank"><img src="https://trendshift.io/api/badge/repositories/12875" alt="Soulter%2FAstrBot | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-<a href="https://hellogithub.com/repository/AstrBotDevs/AstrBot" target="_blank"><img src="https://api.hellogithub.com/v1/widgets/recommend.svg?rid=d127d50cd5e54c5382328acc3bb25483&claim_uid=ZO9by7qCXgSd6Lp&t=1" alt="Featured｜HelloGitHub" style="width: 250px; height: 54px;" width="250" height="54" /></a>
+<a href="https://hellogithub.com/repository/AstrBotDevs/AstrBot" target="_blank"><img src="https://api.hellogithub.com/v1/widgets/recommend.svg?rid=d127d50cd5e54c5382328acc3bb25483&claim_uid=ZO9by7qCXgSd6Lp&t=2" alt="Featured｜HelloGitHub" style="width: 250px; height: 54px;" width="250" height="54" /></a>
 </div>
 
 <br>
@@ -42,7 +42,7 @@ AstrBot 是一个开源的一站式 Agent 聊天机器人平台及开发框架�
 4. **插件扩展**。深度优化的插件机制，支持[开发插件](https://astrbot.app/dev/plugin.html)扩展功能，社区插件生态丰富。
 5. **WebUI**。可视化配置和管理机器人，功能齐全。
 
-## 部署方式
+## 部署方式 
 
 #### Docker 部署(推荐 🥳)
 
@@ -119,83 +119,73 @@ uv run main.py
 
 <a href="https://discord.gg/hAVk6tgV36"><img alt="Discord_community" src="https://img.shields.io/badge/Discord-AstrBot-purple?style=for-the-badge&color=76bad9"></a>
 
-## ⚡ 消息平台支持情况
+## 支持的消息平台
 
 **官方维护**
 
-| 平台    | 支持性 |
-| -------- | ------- |
-| QQ(官方平台) | ✔    |
-| QQ(OneBot)      | ✔    |
-| Telegram   | ✔    |
-| 企微应用    | ✔    |
-| 企微智能机器人 | ✔ |
-| 微信客服    | ✔    |
-| 微信公众号    | ✔    |
-| 飞书   | ✔    |
-| 钉钉   | ✔    |
-| Slack   | ✔    |
-| Discord   | ✔    |
-| Satori   | ✔    |
-| Misskey   | ✔    |
-| Whatsapp | 将支持 |
-| LINE | 将支持 |
+- QQ (官方平台 & OneBot)
+- Telegram
+- 企微应用 & 企微智能机器人
+- 微信客服 & 微信公众号
+- 飞书
+- 钉钉
+- Slack
+- Discord
+- Satori
+- Misskey
+- Whatsapp (将支持)
+- LINE (将支持)
 
 **社区维护**
 
-| 平台    | 支持性 |
-| -------- | ------- |
-| [KOOK](https://github.com/wuyan1003/astrbot_plugin_kook_adapter)   | ✔    |
-| [VoceChat](https://github.com/HikariFroya/astrbot_plugin_vocechat)   | ✔    |
-| [Bilibili 私信](https://github.com/Hina-Chat/astrbot_plugin_bilibili_adapter)   | ✔    |
-| [wxauto](https://github.com/luosheng520qaq/wxauto-repost-onebotv11)   | ✔    |
+- [KOOK](https://github.com/wuyan1003/astrbot_plugin_kook_adapter)
+- [VoceChat](https://github.com/HikariFroya/astrbot_plugin_vocechat)
+- [Bilibili 私信](https://github.com/Hina-Chat/astrbot_plugin_bilibili_adapter)
+- [wxauto](https://github.com/luosheng520qaq/wxauto-repost-onebotv11)
 
-## ⚡ 提供商支持情况
+## 支持的模型服务
 
 **大模型服务**
 
-| 名称  | 支持性 | 备注 |
-| -------- | ------- | ------- |
-| OpenAI | ✔    | 支持任何兼容 OpenAI API 的服务 |
-| Anthropic | ✔    |  |
-| Google Gemini | ✔   |  |
-| Moonshot AI | ✔   |  |
-| 智谱 AI | ✔   |  |
-| DeepSeek | ✔   |  |
-| Ollama | ✔     | 本地部署 DeepSeek 等开源语言模型 |
-| LM Studio | ✔    | 本地部署 DeepSeek 等开源语言模型 |
-| [优云智算](https://www.compshare.cn/?ytag=GPU_YY-gh_astrbot&referral_code=FV7DcGowN4hB5UuXKgpE74) | ✔  |  |
-| [302.AI](https://share.302.ai/rr1M3l) | ✔   |  |
-| [小马算力](https://www.tokenpony.cn/3YPyf) | ✔   |  |
-| 硅基流动 | ✔    |  |
-| PPIO 派欧云 | ✔    |  |
-| ModelScope | ✔    |  |
-| OneAPI | ✔    |  |
-| Dify | ✔    |  |
-| 阿里云百炼应用 | ✔    |  |
-| Coze | ✔    |  |
+- OpenAI 及兼容服务
+- Anthropic
+- Google Gemini
+- Moonshot AI
+- 智谱 AI
+- DeepSeek
+- Ollama (本地部署)
+- LM Studio (本地部署)
+- [优云智算](https://www.compshare.cn/?ytag=GPU_YY-gh_astrbot&referral_code=FV7DcGowN4hB5UuXKgpE74)
+- [302.AI](https://share.302.ai/rr1M3l)
+- [小马算力](https://www.tokenpony.cn/3YPyf)
+- [硅基流动](https://docs.siliconflow.cn/cn/usercases/use-siliconcloud-in-astrbot)
+- [PPIO 派欧云](https://ppio.com/user/register?invited_by=AIOONE)
+- ModelScope
+- OneAPI
+
+**LLMOps 平台**
+
+- Dify
+- 阿里云百炼应用
+- Coze
 
 **语音转文本服务**
 
-| 名称  | 支持性 | 备注 |
-| -------- | ------- | ------- |
-| Whisper | ✔    | 支持 API、本地部署 |
-| SenseVoice | ✔   | 本地部署 |
+- OpenAI Whisper
+- SenseVoice
 
 **文本转语音服务**
 
-| 名称  | 支持性 | 备注 |
-| -------- | ------- | ------- |
-| OpenAI TTS | ✔    |  |
-| Gemini TTS | ✔    |  |
-| GSVI | ✔    | GPT-Sovits-Inference |
-| GPT-SoVITs | ✔     | GPT-Sovits |
-| FishAudio | ✔    | |
-| Edge TTS | ✔    | Edge 浏览器的免费 TTS |
-| 阿里云百炼 TTS | ✔    |  |
-| Azure TTS | ✔   | |
-| Minimax TTS | ✔   | |
-| 火山引擎 TTS | ✔   | |
+- OpenAI TTS
+- Gemini TTS
+- GPT-Sovits-Inference
+- GPT-Sovits
+- FishAudio
+- Edge TTS
+- 阿里云百炼 TTS
+- Azure TTS
+- Minimax TTS
+- 火山引擎 TTS
 
 ## ❤️ 贡献
 
@@ -229,7 +219,7 @@ pre-commit install
 
 ## ⭐ Star History
 
-> [!TIP] 
+> [!TIP]
 > 如果本项目对您的生活 / 工作产生了帮助，或者您关注本项目的未来发展，请给项目 Star，这是我们维护这个开源项目的动力 <3
 
 <div align="center">
