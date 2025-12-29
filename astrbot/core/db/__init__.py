@@ -5,11 +5,12 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 from deprecated import deprecated
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from astrbot.core.db.po import (
     Attachment,
+    CommandConfig,
+    CommandConflict,
     ConversationV2,
     Persona,
     PlatformMessageHistory,
@@ -32,7 +33,7 @@ class BaseDatabase(abc.ABC):
             echo=False,
             future=True,
         )
-        self.AsyncSessionLocal = sessionmaker(
+        self.AsyncSessionLocal = async_sessionmaker(
             self.engine,
             class_=AsyncSession,
             expire_on_commit=False,
@@ -173,7 +174,7 @@ class BaseDatabase(abc.ABC):
         content: dict,
         sender_id: str | None = None,
         sender_name: str | None = None,
-    ) -> None:
+    ) -> PlatformMessageHistory:
         """Insert a new platform message history record."""
         ...
 
@@ -199,6 +200,14 @@ class BaseDatabase(abc.ABC):
         ...
 
     @abc.abstractmethod
+    async def get_platform_message_history_by_id(
+        self,
+        message_id: int,
+    ) -> PlatformMessageHistory | None:
+        """Get a platform message history record by its ID."""
+        ...
+
+    @abc.abstractmethod
     async def insert_attachment(
         self,
         path: str,
@@ -211,6 +220,27 @@ class BaseDatabase(abc.ABC):
     @abc.abstractmethod
     async def get_attachment_by_id(self, attachment_id: str) -> Attachment:
         """Get an attachment by its ID."""
+        ...
+
+    @abc.abstractmethod
+    async def get_attachments(self, attachment_ids: list[str]) -> list[Attachment]:
+        """Get multiple attachments by their IDs."""
+        ...
+
+    @abc.abstractmethod
+    async def delete_attachment(self, attachment_id: str) -> bool:
+        """Delete an attachment by its ID.
+
+        Returns True if the attachment was deleted, False if it was not found.
+        """
+        ...
+
+    @abc.abstractmethod
+    async def delete_attachments(self, attachment_ids: list[str]) -> int:
+        """Delete multiple attachments by their IDs.
+
+        Returns the number of attachments deleted.
+        """
         ...
 
     @abc.abstractmethod
@@ -284,6 +314,76 @@ class BaseDatabase(abc.ABC):
     @abc.abstractmethod
     async def clear_preferences(self, scope: str, scope_id: str) -> None:
         """Clear all preferences for a specific scope ID."""
+        ...
+
+    @abc.abstractmethod
+    async def get_command_configs(self) -> list[CommandConfig]:
+        """Get all stored command configurations."""
+        ...
+
+    @abc.abstractmethod
+    async def get_command_config(self, handler_full_name: str) -> CommandConfig | None:
+        """Fetch a single command configuration by handler."""
+        ...
+
+    @abc.abstractmethod
+    async def upsert_command_config(
+        self,
+        handler_full_name: str,
+        plugin_name: str,
+        module_path: str,
+        original_command: str,
+        *,
+        resolved_command: str | None = None,
+        enabled: bool | None = None,
+        keep_original_alias: bool | None = None,
+        conflict_key: str | None = None,
+        resolution_strategy: str | None = None,
+        note: str | None = None,
+        extra_data: dict | None = None,
+        auto_managed: bool | None = None,
+    ) -> CommandConfig:
+        """Create or update a command configuration."""
+        ...
+
+    @abc.abstractmethod
+    async def delete_command_config(self, handler_full_name: str) -> None:
+        """Delete a single command configuration."""
+        ...
+
+    @abc.abstractmethod
+    async def delete_command_configs(self, handler_full_names: list[str]) -> None:
+        """Bulk delete command configurations."""
+        ...
+
+    @abc.abstractmethod
+    async def list_command_conflicts(
+        self,
+        status: str | None = None,
+    ) -> list[CommandConflict]:
+        """List recorded command conflict entries."""
+        ...
+
+    @abc.abstractmethod
+    async def upsert_command_conflict(
+        self,
+        conflict_key: str,
+        handler_full_name: str,
+        plugin_name: str,
+        *,
+        status: str | None = None,
+        resolution: str | None = None,
+        resolved_command: str | None = None,
+        note: str | None = None,
+        extra_data: dict | None = None,
+        auto_generated: bool | None = None,
+    ) -> CommandConflict:
+        """Create or update a conflict record."""
+        ...
+
+    @abc.abstractmethod
+    async def delete_command_conflicts(self, ids: list[int]) -> None:
+        """Delete conflict records."""
         ...
 
     # @abc.abstractmethod

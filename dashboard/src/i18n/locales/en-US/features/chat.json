@@ -40,7 +40,9 @@
     "deleteChat": "Delete this conversation",
     "editTitle": "Edit Title",
     "fullscreen": "Fullscreen Mode",
-    "exitFullscreen": "Exit Fullscreen"
+    "exitFullscreen": "Exit Fullscreen",
+    "reply": "Reply",
+    "providerConfig": "AI Configuration"
   },
   "conversation": {
     "newConversation": "New Conversation",
@@ -71,6 +73,22 @@
   "reasoning": {
     "thinking": "Thinking Process"
   },
+  "reply": {
+    "replyTo": "Reply to",
+    "notFound": "Message not found"
+  },
+  "time": {
+    "today": "Today",
+    "yesterday": "Yesterday"
+  },
+  "stats": {
+    "tokens": "Tokens",
+    "inputTokens": "Input Tokens",
+    "outputTokens": "Output Tokens",
+    "cachedTokens": "Cached Tokens",
+    "duration": "Duration",
+    "ttft": "Time to First Token"
+  },
   "connection": {
     "title": "Connection Status Notice",
     "message": "The system detected that the chat connection needs to be re-established.",
@@ -85,5 +103,9 @@
       "reconnected": "Chat connection re-established",
       "failed": "Connection failed, please refresh the page"
     }
+  },
+  "errors": {
+    "sendMessageFailed": "Failed to send message, please try again",
+    "createSessionFailed": "Failed to create session, please refresh the page"
   }
 } 

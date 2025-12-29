@@ -162,7 +162,7 @@ function hasVisibleItemsAfter(items, currentIndex) {
         <!-- Regular Property -->
         <template v-else>
           <v-row v-if="!metadata[metadataKey].items[key]?.invisible && shouldShowItem(metadata[metadataKey].items[key], key)" class="config-row">
-            <v-col cols="12" sm="7" class="property-info">
+            <v-col cols="12" sm="6" class="property-info">
               <v-list-item density="compact">
                 <v-list-item-title class="property-name">
                   <span v-if="metadata[metadataKey].items[key]?.description">
@@ -180,7 +180,7 @@ function hasVisibleItemsAfter(items, currentIndex) {
               </v-list-item>
             </v-col>
 
-            <v-col cols="12" sm="5" class="config-input">
+            <v-col cols="12" sm="6" class="config-input">
               <div v-if="metadata[metadataKey].items[key]" class="w-100">
                 <!-- Special handling for specific metadata types -->
                 <div v-if="metadata[metadataKey].items[key]?._special === 'select_provider'">
@@ -304,16 +304,32 @@ function hasVisibleItemsAfter(items, currentIndex) {
                   hide-details
                 ></v-text-field>
 
-                <!-- Numeric input -->
-                <v-text-field
+                <!-- Numeric input with optional slider -->
+                <div
                   v-else-if="(metadata[metadataKey].items[key]?.type === 'int' || metadata[metadataKey].items[key]?.type === 'float') && !metadata[metadataKey]?.invisible"
-                  v-model="iterable[key]"
-                  density="compact"
-                  variant="outlined"
-                  class="config-field"
-                  type="number"
-                  hide-details
-                ></v-text-field>
+                  class="d-flex align-center gap-3"
+                >
+                  <v-slider
+                    v-if="metadata[metadataKey].items[key]?.slider"
+                    v-model.number="iterable[key]"
+                    :min="metadata[metadataKey].items[key]?.slider?.min ?? 0"
+                    :max="metadata[metadataKey].items[key]?.slider?.max ?? 100"
+                    :step="metadata[metadataKey].items[key]?.slider?.step ?? 1"
+                    color="primary"
+                    density="compact"
+                    hide-details
+                    class="flex-grow-1"
+                  ></v-slider>
+                  <v-text-field
+                    v-model.number="iterable[key]"
+                    density="compact"
+                    variant="outlined"
+                    class="config-field"
+                    type="number"
+                    hide-details
+                    style="max-width: 140px;"
+                  ></v-text-field>
+                </div>
 
                 <!-- Text area -->
                 <v-textarea
@@ -413,16 +429,32 @@ function hasVisibleItemsAfter(items, currentIndex) {
               hide-details
             ></v-text-field>
 
-            <!-- Numeric input -->
-            <v-text-field
+            <!-- Numeric input with optional slider -->
+            <div
               v-else-if="(metadata[metadataKey]?.type === 'int' || metadata[metadataKey]?.type === 'float') && !metadata[metadataKey]?.invisible"
-              v-model="iterable[metadataKey]"
-              density="compact"
-              variant="outlined"
-              class="config-field"
-              type="number"
-              hide-details
-            ></v-text-field>
+              class="d-flex align-center gap-3"
+            >
+              <v-slider
+                v-if="metadata[metadataKey]?.slider"
+                v-model.number="iterable[metadataKey]"
+                :min="metadata[metadataKey]?.slider?.min ?? 0"
+                :max="metadata[metadataKey]?.slider?.max ?? 100"
+                :step="metadata[metadataKey]?.slider?.step ?? 1"
+                color="primary"
+                density="compact"
+                hide-details
+                class="flex-grow-1"
+              ></v-slider>
+              <v-text-field
+                v-model.number="iterable[metadataKey]"
+                density="compact"
+                variant="outlined"
+                class="config-field"
+                type="number"
+                hide-details
+                style="max-width: 140px;"
+              ></v-text-field>
+            </div>
 
             <!-- Text area -->
             <v-textarea
@@ -508,6 +540,7 @@ function hasVisibleItemsAfter(items, currentIndex) {
   font-size: 0.85em;
   opacity: 0.7;
   font-weight: normal;
+  display: none;
 }
 
 .important-hint {
@@ -541,7 +574,6 @@ function hasVisibleItemsAfter(items, currentIndex) {
   align-items: center;
   padding: 4px 8px;
   border-radius: 4px;
-  transition: background-color 0.2s;
 }
 
 .config-row:hover {

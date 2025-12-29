@@ -4,7 +4,7 @@ import logging
 import time
 import uuid
 from collections.abc import Awaitable
-from typing import Any
+from typing import Any, cast
 
 from aiocqhttp import CQHttp, Event
 from aiocqhttp.exceptions import ActionFailed
@@ -38,18 +38,16 @@ class AiocqhttpAdapter(Platform):
         platform_settings: dict,
         event_queue: asyncio.Queue,
     ) -> None:
-        super().__init__(event_queue)
+        super().__init__(platform_config, event_queue)
 
-        self.config = platform_config
         self.settings = platform_settings
-        self.unique_session = platform_settings["unique_session"]
         self.host = platform_config["ws_reverse_host"]
         self.port = platform_config["ws_reverse_port"]
 
         self.metadata = PlatformMetadata(
             name="aiocqhttp",
             description="适用于 OneBot 标准的消息平台适配器，支持反向 WebSockets。",
-            id=self.config.get("id"),
+            id=cast(str, self.config.get("id")),
             support_streaming_message=False,
         )
 
@@ -128,21 +126,20 @@ class AiocqhttpAdapter(Platform):
         """OneBot V11 请求类事件"""
         abm = AstrBotMessage()
         abm.self_id = str(event.self_id)
-        abm.sender = MessageMember(user_id=str(event.user_id), nickname=event.user_id)
+        abm.sender = MessageMember(
+            user_id=str(event.user_id), nickname=str(event.user_id)
+        )
         abm.type = MessageType.OTHER_MESSAGE
         if event.get("group_id"):
             abm.type = MessageType.GROUP_MESSAGE
             abm.group_id = str(event.group_id)
         else:
             abm.type = MessageType.FRIEND_MESSAGE
-        if self.unique_session and abm.type == MessageType.GROUP_MESSAGE:
-            abm.session_id = str(abm.sender.user_id) + "_" + str(event.group_id)
-        else:
-            abm.session_id = (
-                str(event.group_id)
-                if abm.type == MessageType.GROUP_MESSAGE
-                else abm.sender.user_id
-            )
+        abm.session_id = (
+            str(event.group_id)
+            if abm.type == MessageType.GROUP_MESSAGE
+            else abm.sender.user_id
+        )
         abm.message_str = ""
         abm.message = []
         abm.timestamp = int(time.time())
@@ -154,23 +151,20 @@ class AiocqhttpAdapter(Platform):
         """OneBot V11 通知类事件"""
         abm = AstrBotMessage()
         abm.self_id = str(event.self_id)
-        abm.sender = MessageMember(user_id=str(event.user_id), nickname=event.user_id)
+        abm.sender = MessageMember(
+            user_id=str(event.user_id), nickname=str(event.user_id)
+        )
         abm.type = MessageType.OTHER_MESSAGE
         if event.get("group_id"):
             abm.group_id = str(event.group_id)
             abm.type = MessageType.GROUP_MESSAGE
         else:
             abm.type = MessageType.FRIEND_MESSAGE
-        if self.unique_session and abm.type == MessageType.GROUP_MESSAGE:
-            abm.session_id = (
-                str(abm.sender.user_id) + "_" + str(event.group_id)
-            )  # 也保留群组 id
-        else:
-            abm.session_id = (
-                str(event.group_id)
-                if abm.type == MessageType.GROUP_MESSAGE
-                else abm.sender.user_id
-            )
+        abm.session_id = (
+            str(event.group_id)
+            if abm.type == MessageType.GROUP_MESSAGE
+            else abm.sender.user_id
+        )
         abm.message_str = ""
         abm.message = []
         abm.raw_message = event
@@ -193,6 +187,7 @@ class AiocqhttpAdapter(Platform):
         @param event: 事件对象
         @param get_reply: 是否获取回复消息。这个参数是为了防止多个回复嵌套。
         """
+        assert event.sender is not None
         abm = AstrBotMessage()
         abm.self_id = str(event.self_id)
         abm.sender = MessageMember(
@@ -202,19 +197,15 @@ class AiocqhttpAdapter(Platform):
         if event["message_type"] == "group":
             abm.type = MessageType.GROUP_MESSAGE
             abm.group_id = str(event.group_id)
+            abm.group = Group(str(event.group_id))
             abm.group.group_name = event.get("group_name", "N/A")
         elif event["message_type"] == "private":
             abm.type = MessageType.FRIEND_MESSAGE
-        if self.unique_session and abm.type == MessageType.GROUP_MESSAGE:
-            abm.session_id = (
-                abm.sender.user_id + "_" + str(event.group_id)
-            )  # 也保留群组 id
-        else:
-            abm.session_id = (
-                str(event.group_id)
-                if abm.type == MessageType.GROUP_MESSAGE
-                else abm.sender.user_id
-            )
+        abm.session_id = (
+            str(event.group_id)
+            if abm.type == MessageType.GROUP_MESSAGE
+            else abm.sender.user_id
+        )
 
         abm.message_id = str(event.message_id)
         abm.message = []
@@ -227,7 +218,7 @@ class AiocqhttpAdapter(Platform):
                 await self.bot.send(event, err)
             except BaseException as e:
                 logger.error(f"回复消息失败: {e}")
-            return None
+            raise ValueError(err)
 
         # 按消息段类型类型适配
         for t, m_group in itertools.groupby(event.message, key=lambda x: x["type"]):
@@ -246,7 +237,13 @@ class AiocqhttpAdapter(Platform):
                     if m["data"].get("url") and m["data"].get("url").startswith("http"):
                         # Lagrange
                         logger.info("guessing lagrange")
-                        file_name = m["data"].get("file_name", "file")
+                        # 检查多个可能的文件名字段
+                        file_name = (
+                            m["data"].get("file_name", "")
+                            or m["data"].get("name", "")
+                            or m["data"].get("file", "")
+                            or "file"
+                        )
                         abm.message.append(File(name=file_name, url=m["data"]["url"]))
                     else:
                         try:
@@ -265,7 +262,14 @@ class AiocqhttpAdapter(Platform):
                                 )
                             if ret and "url" in ret:
                                 file_url = ret["url"]  # https
-                                a = File(name="", url=file_url)
+                                # 优先从 API 返回值获取文件名，其次从原始消息数据获取
+                                file_name = (
+                                    ret.get("file_name", "")
+                                    or ret.get("name", "")
+                                    or m["data"].get("file", "")
+                                    or m["data"].get("file_name", "")
+                                )
+                                a = File(name=file_name, url=file_url)
                                 abm.message.append(a)
                             else:
                                 logger.error(f"获取文件失败: {ret}")
@@ -367,10 +371,25 @@ class AiocqhttpAdapter(Platform):
                         logger.error(f"获取 @ 用户信息失败: {e}，此消息段将被忽略。")
 
                 message_str += "".join(at_parts)
+            elif t == "markdown":
+                text = m["data"].get("markdown") or m["data"].get("content", "")
+                abm.message.append(Plain(text=text))
+                message_str += text
             else:
                 for m in m_group:
-                    a = ComponentTypes[t](**m["data"])
-                    abm.message.append(a)
+                    try:
+                        if t not in ComponentTypes:
+                            logger.warning(
+                                f"不支持的消息段类型，已忽略: {t}, data={m['data']}"
+                            )
+                            continue
+                        a = ComponentTypes[t](**m["data"])
+                        abm.message.append(a)
+                    except Exception as e:
+                        logger.exception(
+                            f"消息段解析失败: type={t}, data={m['data']}. {e}"
+                        )
+                        continue
 
         abm.timestamp = int(time.time())
         abm.message_str = message_str
@@ -403,7 +422,7 @@ class AiocqhttpAdapter(Platform):
 
     async def shutdown_trigger_placeholder(self):
         await self.shutdown_event.wait()
-        logger.info("aiocqhttp 适配器已被优雅地关闭")
+        logger.info("aiocqhttp 适配器已被关闭")
 
     def meta(self) -> PlatformMetadata:
         return self.metadata

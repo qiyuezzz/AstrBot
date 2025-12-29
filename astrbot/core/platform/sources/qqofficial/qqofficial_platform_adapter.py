@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import time
+from typing import cast
 
 import botpy
 import botpy.message
@@ -43,9 +44,8 @@ class botClient(Client):
             message,
             MessageType.GROUP_MESSAGE,
         )
-        abm.session_id = (
-            abm.sender.user_id if self.platform.unique_session else message.group_openid
-        )
+        abm.group_id = cast(str, message.group_openid)
+        abm.session_id = abm.group_id
         self._commit(abm)
 
     # 收到频道消息
@@ -54,9 +54,8 @@ class botClient(Client):
             message,
             MessageType.GROUP_MESSAGE,
         )
-        abm.session_id = (
-            abm.sender.user_id if self.platform.unique_session else message.channel_id
-        )
+        abm.group_id = message.channel_id
+        abm.session_id = abm.group_id
         self._commit(abm)
 
     # 收到私聊消息
@@ -97,13 +96,10 @@ class QQOfficialPlatformAdapter(Platform):
         platform_settings: dict,
         event_queue: asyncio.Queue,
     ) -> None:
-        super().__init__(event_queue)
-
-        self.config = platform_config
+        super().__init__(platform_config, event_queue)
 
         self.appid = platform_config["appid"]
         self.secret = platform_config["secret"]
-        self.unique_session = platform_settings["unique_session"]
         qq_group = platform_config["enable_group_c2c"]
         guild_dm = platform_config["enable_guild_direct_message"]
 
@@ -139,12 +135,15 @@ class QQOfficialPlatformAdapter(Platform):
         return PlatformMetadata(
             name="qq_official",
             description="QQ 机器人官方 API 适配器",
-            id=self.config.get("id"),
+            id=cast(str, self.config.get("id")),
         )
 
     @staticmethod
     def _parse_from_qqofficial(
-        message: botpy.message.Message | botpy.message.GroupMessage,
+        message: botpy.message.Message
+        | botpy.message.GroupMessage
+        | botpy.message.DirectMessage
+        | botpy.message.C2CMessage,
         message_type: MessageType,
     ):
         abm = AstrBotMessage()
@@ -152,7 +151,7 @@ class QQOfficialPlatformAdapter(Platform):
         abm.timestamp = int(time.time())
         abm.raw_message = message
         abm.message_id = message.id
-        abm.tag = "qq_official"
+        # abm.tag = "qq_official"
         msg: list[BaseMessageComponent] = []
 
         if isinstance(message, botpy.message.GroupMessage) or isinstance(
@@ -182,9 +181,9 @@ class QQOfficialPlatformAdapter(Platform):
             message,
             botpy.message.DirectMessage,
         ):
-            try:
+            if isinstance(message, botpy.message.Message):
                 abm.self_id = str(message.mentions[0].id)
-            except BaseException as _:
+            else:
                 abm.self_id = ""
 
             plain_content = message.content.replace(

@@ -24,6 +24,7 @@ import asyncio
 import logging
 import os
 import sys
+import time
 from asyncio import Queue
 from collections import deque
 
@@ -57,7 +58,7 @@ def is_plugin_path(pathname):
         return False
 
     norm_path = os.path.normpath(pathname)
-    return ("data/plugins" in norm_path) or ("packages/" in norm_path)
+    return ("data/plugins" in norm_path) or ("astrbot/builtin_stars/" in norm_path)
 
 
 def get_short_level_name(level_name):
@@ -148,7 +149,7 @@ class LogQueueHandler(logging.Handler):
         self.log_broker.publish(
             {
                 "level": record.levelname,
-                "time": record.asctime,
+                "time": time.time(),
                 "data": log_entry,
             },
         )

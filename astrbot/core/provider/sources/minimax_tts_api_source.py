@@ -51,13 +51,16 @@ class ProviderMiniMaxTTSAPI(TTSProvider):
             "voice_id": ""
             if self.is_timber_weight
             else provider_config.get("minimax-voice-id", ""),
-            "emotion": provider_config.get("minimax-voice-emotion", "neutral"),
+            "emotion": provider_config.get("minimax-voice-emotion", "auto"),
             "latex_read": provider_config.get("minimax-voice-latex", False),
             "english_normalization": provider_config.get(
                 "minimax-voice-english-normalization",
                 False,
             ),
         }
+
+        if self.voice_setting["emotion"] == "auto":
+            self.voice_setting.pop("emotion", None)
 
         self.audio_setting: dict = {
             "sample_rate": 32000,
@@ -87,7 +90,7 @@ class ProviderMiniMaxTTSAPI(TTSProvider):
 
         return json.dumps(dict_body)
 
-    async def _call_tts_stream(self, text: str) -> AsyncIterator[bytes]:
+    async def _call_tts_stream(self, text: str) -> AsyncIterator[str]:
         """进行流式请求"""
         try:
             async with (
@@ -117,7 +120,9 @@ class ProviderMiniMaxTTSAPI(TTSProvider):
                                     data = json.loads(message[6:])
                                     if "extra_info" in data:
                                         continue
-                                    audio = data.get("data", {}).get("audio")
+                                    audio: str | None = data.get("data", {}).get(
+                                        "audio"
+                                    )
                                     if audio is not None:
                                         yield audio
                                 except json.JSONDecodeError:

@@ -1,4 +1,5 @@
 import asyncio
+from typing import cast
 
 import dingtalk_stream
 
@@ -24,6 +25,20 @@ class DingtalkMessageEvent(AstrMessageEvent):
         client: dingtalk_stream.ChatbotHandler,
         message: MessageChain,
     ):
+        icm = cast(dingtalk_stream.ChatbotMessage, self.message_obj.raw_message)
+        ats = []
+        # fixes: #4218
+        # 钉钉 at 机器人需要使用 sender_staff_id 而不是 sender_id
+        for i in message.chain:
+            if isinstance(i, Comp.At):
+                print(i.qq, icm.sender_id, icm.sender_staff_id)
+                if str(i.qq) in str(icm.sender_id or ""):
+                    # 适配器会将开头的 $:LWCP_v1:$ 去掉，因此我们用 in 判断
+                    ats.append(f"@{icm.sender_staff_id}")
+                else:
+                    ats.append(f"@{i.qq}")
+        at_str = " ".join(ats)
+
         for segment in message.chain:
             if isinstance(segment, Comp.Plain):
                 segment.text = segment.text.strip()
@@ -31,8 +46,8 @@ class DingtalkMessageEvent(AstrMessageEvent):
                     None,
                     client.reply_markdown,
                     segment.text,
-                    segment.text,
-                    self.message_obj.raw_message,
+                    f"{at_str} {segment.text}".strip(),
+                    cast(dingtalk_stream.ChatbotMessage, self.message_obj.raw_message),
                 )
             elif isinstance(segment, Comp.Image):
                 markdown_str = ""
@@ -53,7 +68,9 @@ class DingtalkMessageEvent(AstrMessageEvent):
                         client.reply_markdown,
                         "😄",
                         markdown_str,
-                        self.message_obj.raw_message,
+                        cast(
+                            dingtalk_stream.ChatbotMessage, self.message_obj.raw_message
+                        ),
                     )
                     logger.debug(f"send image: {ret}")
 

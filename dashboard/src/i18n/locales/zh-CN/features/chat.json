@@ -40,7 +40,9 @@
     "deleteChat": "删除此对话",
     "editTitle": "编辑标题",
     "fullscreen": "全屏模式",
-    "exitFullscreen": "退出全屏"
+    "exitFullscreen": "退出全屏",
+    "reply": "引用回复",
+    "providerConfig": "AI 配置"
   },
   "conversation": {
     "newConversation": "新的聊天",
@@ -71,6 +73,22 @@
   "reasoning": {
     "thinking": "思考过程"
   },
+  "reply": {
+    "replyTo": "引用",
+    "notFound": "无法定位消息"
+  },
+  "time": {
+    "today": "今天",
+    "yesterday": "昨天"
+  },
+  "stats": {
+    "tokens": "Token",
+    "inputTokens": "输入 Token",
+    "outputTokens": "输出 Token",
+    "cachedTokens": "缓存 Token",
+    "duration": "耗时",
+    "ttft": "首字时间"
+  },
   "connection": {
     "title": "连接状态提醒",
     "message": "系统检测到聊天连接需要重新建立。",
@@ -85,5 +103,9 @@
       "reconnected": "聊天连接已重新建立",
       "failed": "连接失败，请刷新页面重试"
     }
+  },
+  "errors": {
+    "sendMessageFailed": "发送消息失败，请重试",
+    "createSessionFailed": "创建会话失败，请刷新页面重试"
   }
 } 

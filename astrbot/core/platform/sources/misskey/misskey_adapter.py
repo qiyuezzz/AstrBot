@@ -1,7 +1,6 @@
 import asyncio
 import os
 import random
-from collections.abc import Awaitable
 from typing import Any
 
 import astrbot.api.message_components as Comp
@@ -55,8 +54,7 @@ class MisskeyPlatformAdapter(Platform):
         platform_settings: dict,
         event_queue: asyncio.Queue,
     ) -> None:
-        super().__init__(event_queue)
-        self.config = platform_config or {}
+        super().__init__(platform_config or {}, event_queue)
         self.settings = platform_settings or {}
         self.instance_url = self.config.get("misskey_instance_url", "")
         self.access_token = self.config.get("misskey_token", "")
@@ -92,8 +90,6 @@ class MisskeyPlatformAdapter(Platform):
             self.max_download_bytes = int(_md_bytes) if _md_bytes is not None else None
         except Exception:
             self.max_download_bytes = None
-
-        self.unique_session = platform_settings["unique_session"]
 
         self.api: MisskeyAPI | None = None
         self._running = False
@@ -204,7 +200,7 @@ class MisskeyPlatformAdapter(Platform):
             if not isinstance(message.raw_message, dict):
                 message.raw_message = {}
             message.raw_message["poll"] = poll
-            message.poll = poll
+            message.__setattr__("poll", poll)
         except Exception:
             pass
 
@@ -373,7 +369,7 @@ class MisskeyPlatformAdapter(Platform):
         self,
         session: MessageSession,
         message_chain: MessageChain,
-    ) -> Awaitable[Any]:
+    ) -> None:
         if not self.api:
             logger.error("[Misskey] API 客户端未初始化")
             return await super().send_by_session(session, message_chain)
@@ -643,7 +639,6 @@ class MisskeyPlatformAdapter(Platform):
             sender_info,
             self.client_self_id,
             is_chat=False,
-            unique_session=self.unique_session,
         )
         cache_user_info(
             self._user_cache,
@@ -692,7 +687,6 @@ class MisskeyPlatformAdapter(Platform):
             sender_info,
             self.client_self_id,
             is_chat=True,
-            unique_session=self.unique_session,
         )
         cache_user_info(
             self._user_cache,
@@ -722,7 +716,6 @@ class MisskeyPlatformAdapter(Platform):
             self.client_self_id,
             is_chat=False,
             room_id=room_id,
-            unique_session=self.unique_session,
         )
 
         cache_user_info(

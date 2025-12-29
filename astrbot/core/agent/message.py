@@ -3,7 +3,7 @@
 
 from typing import Any, ClassVar, Literal, cast
 
-from pydantic import BaseModel, GetCoreSchemaHandler
+from pydantic import BaseModel, GetCoreSchemaHandler, model_serializer, model_validator
 from pydantic_core import core_schema
 
 
@@ -12,7 +12,7 @@ class ContentPart(BaseModel):
 
     __content_part_registry: ClassVar[dict[str, type["ContentPart"]]] = {}
 
-    type: str
+    type: Literal["text", "think", "image_url", "audio_url"]
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
@@ -61,6 +61,28 @@ class TextPart(ContentPart):
 
     type: str = "text"
     text: str
+
+
+class ThinkPart(ContentPart):
+    """
+    >>> ThinkPart(think="I think I need to think about this.").model_dump()
+    {'type': 'think', 'think': 'I think I need to think about this.', 'encrypted': None}
+    """
+
+    type: str = "think"
+    think: str
+    encrypted: str | None = None
+    """Encrypted thinking content, or signature."""
+
+    def merge_in_place(self, other: Any) -> bool:
+        if not isinstance(other, ThinkPart):
+            return False
+        if self.encrypted:
+            return False
+        self.think += other.think
+        if other.encrypted:
+            self.encrypted = other.encrypted
+        return True
 
 
 class ImageURLPart(ContentPart):
@@ -122,10 +144,12 @@ class ToolCall(BaseModel):
     extra_content: dict[str, Any] | None = None
     """Extra metadata for the tool call."""
 
-    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        data = handler(self)
         if self.extra_content is None:
-            kwargs.setdefault("exclude", set()).add("extra_content")
-        return super().model_dump(**kwargs)
+            data.pop("extra_content", None)
+        return data
 
 
 class ToolCallPart(BaseModel):
@@ -145,22 +169,48 @@ class Message(BaseModel):
         "tool",
     ]
 
-    content: str | list[ContentPart]
+    content: str | list[ContentPart] | None = None
     """The content of the message."""
+
+    tool_calls: list[ToolCall] | list[dict] | None = None
+    """The tool calls of the message."""
+
+    tool_call_id: str | None = None
+    """The ID of the tool call."""
+
+    @model_validator(mode="after")
+    def check_content_required(self):
+        # assistant + tool_calls is not None: allow content to be None
+        if self.role == "assistant" and self.tool_calls is not None:
+            return self
+
+        # other all cases: content is required
+        if self.content is None:
+            raise ValueError(
+                "content is required unless role='assistant' and tool_calls is not None"
+            )
+        return self
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        data = handler(self)
+        if self.tool_calls is None:
+            data.pop("tool_calls", None)
+        if self.tool_call_id is None:
+            data.pop("tool_call_id", None)
+        return data
 
 
 class AssistantMessageSegment(Message):
     """A message segment from the assistant."""
 
     role: Literal["assistant"] = "assistant"
-    tool_calls: list[ToolCall] | list[dict] | None = None
 
 
 class ToolCallMessageSegment(Message):
     """A message segment representing a tool call."""
 
     role: Literal["tool"] = "tool"
-    tool_call_id: str
 
 
 class UserMessageSegment(Message):

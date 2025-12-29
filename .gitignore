@@ -24,9 +24,9 @@ configs/session
 configs/config.yaml
 cmd_config.json
 
-# Plugins and packages
+# Plugins
 addons/plugins
-packages/python_interpreter/workplace
+astrbot/builtin_stars/python_interpreter/workplace
 tests/astrbot_plugin_openai
 
 # Dashboard
@@ -34,6 +34,7 @@ dashboard/node_modules/
 dashboard/dist/
 package-lock.json
 package.json
+yarn.lock
 
 # Operating System
 **/.DS_Store
@@ -47,3 +48,5 @@ astrbot.lock
 chroma
 venv/*
 pytest.ini
+AGENTS.md
+IFLOW.md

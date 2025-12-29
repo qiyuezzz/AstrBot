@@ -18,11 +18,13 @@ from astrbot.core.config.astrbot_config import AstrBotConfig
 from astrbot.core.provider.register import llm_tools
 from astrbot.core.utils.astrbot_path import (
     get_astrbot_config_path,
+    get_astrbot_path,
     get_astrbot_plugin_path,
 )
 from astrbot.core.utils.io import remove_dir
 
 from . import StarMetadata
+from .command_management import sync_command_configs
 from .context import Context
 from .filter.permission import PermissionType, PermissionTypeFilter
 from .star import star_map, star_registry
@@ -48,13 +50,10 @@ class PluginManager:
         """存储插件的路径。即 data/plugins"""
         self.plugin_config_path = get_astrbot_config_path()
         """存储插件配置的路径。data/config"""
-        self.reserved_plugin_path = os.path.abspath(
-            os.path.join(
-                os.path.dirname(os.path.abspath(__file__)),
-                "../../../packages",
-            ),
+        self.reserved_plugin_path = os.path.join(
+            get_astrbot_path(), "astrbot", "builtin_stars"
         )
-        """保留插件的路径。在 packages 目录下"""
+        """保留插件的路径。在 astrbot/builtin_stars 目录下"""
         self.conf_schema_fname = "_conf_schema.json"
         self.logo_fname = "logo.png"
         """插件配置 Schema 文件名"""
@@ -251,7 +250,7 @@ class PluginManager:
             list[str]: 与该插件相关的模块名列表
 
         """
-        prefix = "packages." if is_reserved else "data.plugins."
+        prefix = "astrbot.builtin_stars." if is_reserved else "data.plugins."
         return [
             key
             for key in list(sys.modules.keys())
@@ -269,7 +268,7 @@ class PluginManager:
         可以基于模块名模式或插件目录名移除模块，用于清理插件相关的模块缓存
 
         Args:
-            module_patterns: 要移除的模块名模式列表（例如 ["data.plugins", "packages"]）
+            module_patterns: 要移除的模块名模式列表（例如 ["data.plugins", "astrbot.builtin_stars"]）
             root_dir_name: 插件根目录名，用于移除与该插件相关的所有模块
             is_reserved: 插件是否为保留插件（影响模块路径前缀）
 
@@ -381,9 +380,9 @@ class PluginManager:
                 reserved = plugin_module.get(
                     "reserved",
                     False,
-                )  # 是否是保留插件。目前在 packages/ 目录下的都是保留插件。保留插件不可以卸载。
+                )  # 是否是保留插件。目前在 astrbot/builtin_stars 目录下的都是保留插件。保留插件不可以卸载。
 
-                path = "data.plugins." if not reserved else "packages."
+                path = "data.plugins." if not reserved else "astrbot.builtin_stars."
                 path += root_dir_name + "." + module_str
 
                 # 检查是否需要载入指定的插件
@@ -467,6 +466,18 @@ class PluginManager:
                             metadata.star_cls = metadata.star_cls_type(
                                 context=self.context,
                             )
+
+                        p_name = (metadata.name or "unknown").lower().replace("/", "_")
+                        p_author = (
+                            (metadata.author or "unknown").lower().replace("/", "_")
+                        )
+                        setattr(metadata.star_cls, "name", p_name)
+                        setattr(metadata.star_cls, "author", p_author)
+                        setattr(
+                            metadata.star_cls,
+                            "plugin_id",
+                            f"{p_author}/{p_name}",
+                        )
                     else:
                         logger.info(f"插件 {metadata.name} 已被禁用。")
 
@@ -618,6 +629,11 @@ class PluginManager:
         # 清除 pip.main 导致的多余的 logging handlers
         for handler in logging.root.handlers[:]:
             logging.root.removeHandler(handler)
+        try:
+            await sync_command_configs()
+        except Exception as e:
+            logger.error(f"同步指令配置失败: {e!s}")
+            logger.error(traceback.format_exc())
 
         if not fail_rec:
             return True, None
@@ -811,7 +827,7 @@ class PluginManager:
             if (
                 mp
                 and mp.startswith(plugin_module_path)
-                and not mp.endswith(("packages", "data.plugins"))
+                and not mp.endswith(("astrbot.builtin_stars", "data.plugins"))
             ):
                 to_remove.append(func_tool)
         for func_tool in to_remove:
@@ -866,7 +882,7 @@ class PluginManager:
                     plugin.module_path
                     and mp
                     and plugin.module_path.startswith(mp)
-                    and not mp.endswith(("packages", "data.plugins"))
+                    and not mp.endswith(("astrbot.builtin_stars", "data.plugins"))
                 ):
                     func_tool.active = False
                     if func_tool.name not in inactivated_llm_tools:
@@ -915,7 +931,7 @@ class PluginManager:
                 plugin.module_path
                 and mp
                 and plugin.module_path.startswith(mp)
-                and not mp.endswith(("packages", "data.plugins"))
+                and not mp.endswith(("astrbot.builtin_stars", "data.plugins"))
                 and func_tool.name in inactivated_llm_tools
             ):
                 inactivated_llm_tools.remove(func_tool.name)

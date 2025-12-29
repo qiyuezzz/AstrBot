@@ -117,7 +117,9 @@ class RespondStage(Stage):
         if not self.enable_seg:
             return False
 
-        if self.only_llm_result and not event.get_result().is_llm_result():
+        if (result := event.get_result()) is None:
+            return False
+        if self.only_llm_result and not result.is_llm_result():
             return False
 
         if event.get_platform_name() in [
@@ -156,7 +158,11 @@ class RespondStage(Stage):
         result = event.get_result()
         if result is None:
             return
+        if event.get_extra("_streaming_finished", False):
+            # prevent some plugin make result content type to LLM_RESULT after streaming finished, lead to send again
+            return
         if result.result_content_type == ResultContentType.STREAMING_FINISH:
+            event.set_extra("_streaming_finished", True)
             return
 
         logger.info(
@@ -185,7 +191,7 @@ class RespondStage(Stage):
                     if isinstance(component, Comp.File) and component.file:
                         # 支持 File 消息段的路径映射。
                         component.file = path_Mapping(mappings, component.file)
-                        event.get_result().chain[idx] = component
+                        result.chain[idx] = component
 
             # 检查消息链是否为空
             try:

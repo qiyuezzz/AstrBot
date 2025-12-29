@@ -267,6 +267,10 @@ class Context:
     ):
         """通过 ID 获取对应的 LLM Provider。"""
         prov = self.provider_manager.inst_map.get(provider_id)
+        if provider_id and not prov:
+            logger.warning(
+                f"没有找到 ID 为 {provider_id} 的提供商，这可能是由于您修改了提供商（模型）ID 导致的。"
+            )
         return prov
 
     def get_all_providers(self) -> list[Provider]:
@@ -285,7 +289,7 @@ class Context:
         """获取所有用于 Embedding 任务的 Provider。"""
         return self.provider_manager.embedding_provider_insts
 
-    def get_using_provider(self, umo: str | None = None) -> Provider | None:
+    def get_using_provider(self, umo: str | None = None) -> Provider:
         """获取当前使用的用于文本生成任务的 LLM Provider(Chat_Completion 类型)。通过 /provider 指令切换。
 
         Args:
@@ -296,7 +300,7 @@ class Context:
             provider_type=ProviderType.CHAT_COMPLETION,
             umo=umo,
         )
-        if prov and not isinstance(prov, Provider):
+        if not isinstance(prov, Provider):
             raise ValueError("返回的 Provider 不是 Provider 类型")
         return prov
 
@@ -373,7 +377,7 @@ class Context:
             if not module_path:
                 _parts = []
                 module_part = tool.__module__.split(".")
-                flags = ["packages", "plugins"]
+                flags = ["builtin_stars", "plugins"]
                 for i, part in enumerate(module_part):
                     _parts.append(part)
                     if part in flags and i + 1 < len(module_part):
