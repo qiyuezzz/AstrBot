@@ -22,7 +22,6 @@ UNIQUE_SESSION_ID_BUILDERS: dict[str, Callable[[AstrMessageEvent], str | None]] 
     "qq_official_webhook": lambda e: e.get_sender_id(),
     "lark": lambda e: f"{e.get_sender_id()}%{e.get_group_id()}",
     "misskey": lambda e: f"{e.get_session_id()}_{e.get_sender_id()}",
-    "wechatpadpro": lambda e: f"{e.get_group_id()}#{e.get_sender_id()}",
 }
 
 
@@ -227,7 +226,7 @@ class WakingCheckStage(Stage):
             event._extras.pop("parsed_params", None)
 
         # 根据会话配置过滤插件处理器
-        activated_handlers = SessionPluginManager.filter_handlers_by_session(
+        activated_handlers = await SessionPluginManager.filter_handlers_by_session(
             event,
             activated_handlers,
         )
